@@ -50,3 +50,27 @@ export const MIKU_EMOTION_CONFIG_GROUP: ConfigGroup = {
     },
   },
 };
+
+/**
+ * 文本工具协议。端点投递不了请求体的 `tools` 时,模型既不知道有哪些工具,也产不出结构化调用;
+ * 打开后把工具表与调用写法写进前缀,端点侧把代码块翻成调用。
+ *
+ * 默认值在 `index.ts` 的 `defaults()` 里,不写在 schema 上:它取决于端点背后的模型,那属于部署。
+ */
+export const MIKU_TOOL_PROTOCOL_CONFIG_GROUP: ConfigGroup = {
+  id: 'miku-tool-protocol',
+  owner: 'persona',
+  schema: {
+    type: 'object',
+    title: '工具协议',
+    description: '端点不投递工具声明时,把工具表与调用写法写进前缀。',
+    properties: {
+      'toolProtocol.enabled': {
+        type: 'boolean',
+        title: '前缀带工具表',
+        'x-hot': true,
+        description: '端点能投递工具声明时关掉:重述既占前缀预算,又可能与实际声明不一致。',
+      },
+    },
+  },
+};

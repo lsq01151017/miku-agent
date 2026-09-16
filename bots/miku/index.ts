@@ -7,8 +7,12 @@ import type { LoadedConfig } from 'cortico/deploy.ts';
 import { CORE_DEFAULTS } from 'cortico/core/config.ts';
 import type { WorldDeclaration } from 'cortico/world.ts';
 import type { TerminalConfigSection } from 'cortico/worlds/terminal/config.ts';
-import { MIKU_CONTEXT_DEFAULTS, Miku, type EmotionPolicy } from './persona/persona.ts';
-import { MIKU_CONTEXT_CONFIG_GROUP, MIKU_EMOTION_CONFIG_GROUP } from './persona/config.ts';
+import { MIKU_CONTEXT_DEFAULTS, Miku, type EmotionPolicy, type ToolProtocolPolicy } from './persona/persona.ts';
+import {
+  MIKU_CONTEXT_CONFIG_GROUP,
+  MIKU_EMOTION_CONFIG_GROUP,
+  MIKU_TOOL_PROTOCOL_CONFIG_GROUP,
+} from './persona/config.ts';
 import type { ContextStagePolicy } from '../cormini/persona/persona.ts';
 
 const HERE = resolve(import.meta.dirname);
@@ -27,6 +31,7 @@ export interface MikuConfig extends CoreConfig {
   context: CoreConfig['context'] & ContextStagePolicy;
   rounds: { soft: number; hard: number };
   emotion: EmotionPolicy;
+  toolProtocol: ToolProtocolPolicy;
   tick: {
     /** null disables baseline wakeups. */
     intervalMinutes: number | null;
@@ -52,6 +57,7 @@ function build(loaded: LoadedConfig<MikuConfig>, worlds: World[]): BotParts<Miku
     firstTurnDir: resolve(loaded.rootDir, 'prompts'),
     // 现读:控制台上改完即生效,不用重启。
     emotion: () => cfg.emotion,
+    toolProtocol: () => cfg.toolProtocol,
     tickDelayMs: () =>
       cfg.tick.intervalMinutes === null ? null : cfg.tick.intervalMinutes * 60_000,
   });
@@ -65,7 +71,7 @@ function build(loaded: LoadedConfig<MikuConfig>, worlds: World[]): BotParts<Miku
       persona.stopRhythm();
     },
     console: {
-      configGroups: [MIKU_CONTEXT_CONFIG_GROUP, MIKU_EMOTION_CONFIG_GROUP],
+      configGroups: [MIKU_CONTEXT_CONFIG_GROUP, MIKU_EMOTION_CONFIG_GROUP, MIKU_TOOL_PROTOCOL_CONFIG_GROUP],
       // 阶段预算与软预警线(终端页上下文圈的分母与黄线);计数与物理上限由 core 报
       status: () => ({
         context: { maxTokens: cfg.context.maxTokens, softRatio: cfg.context.softRatio },
@@ -93,6 +99,8 @@ const definition: BotDefinition<MikuConfig> = {
     rounds: { soft: 6, hard: 12 },
     // 词表分析默认开着;它不可靠时可以整层关掉,状态冻结在当前值。
     emotion: { enabled: true, maxStepPerTurn: 0.3, decayScale: 1 },
+    // 端点收不到请求体的 `tools` 时,部署把它打开。默认关:能投递声明的端点不需要重述。
+    toolProtocol: { enabled: false },
     tick: { intervalMinutes: null },
   } as unknown as MikuConfig),
   build,

@@ -1,13 +1,19 @@
 /**
  * 初音未来。继承 `Cormini`:工作区即记忆、Git 记账、交接与心跳都沿用基类。
  *
- * 差异只有四处:自己那份前缀模板、情绪状态、心跳措辞、以及暴露给控制台的状态快照。
+ * 差异是这几处:自己那份前缀模板、情绪状态、心跳措辞、工具协议段,以及暴露给控制台的状态快照。
  * 权限矩阵与梦在后续步骤里按同一手法覆写 `writeGuard` 与 `declareSessions`。
  */
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CoreApi, EventEnvelope, SystemPrefixContext } from 'cortico/core/types.ts';
-import { Cormini, type CorminiOptions, type ContextStagePolicy } from '../../cormini/persona/persona.ts';
+import type {
+  CoreApi,
+  EventEnvelope,
+  PrefixSegment,
+  SystemPrefixContext,
+  ToolDef,
+} from 'cortico/core/types.ts';
+import { Cormini, MAIN, type CorminiOptions, type ContextStagePolicy } from '../../cormini/persona/persona.ts';
 import {
   analyzeAffect,
   applyDeltas,
@@ -17,6 +23,7 @@ import {
   initialEmotion,
   type EmotionState,
 } from './emotion.ts';
+import { renderToolProtocol } from './toolProtocol.ts';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 
@@ -37,18 +44,27 @@ export interface EmotionPolicy {
   decayScale: number;
 }
 
+/** 前缀里要不要带工具表。端点能投递结构化 `tools` 时不需要。 */
+export interface ToolProtocolPolicy {
+  enabled: boolean;
+}
+
 export interface MikuOptions extends CorminiOptions {
   /** 情绪裁量,每次现读;不给 = 默认值。 */
   emotion?: () => EmotionPolicy;
+  /** 工具协议裁量,每次现读;不给 = 不带工具表。 */
+  toolProtocol?: () => ToolProtocolPolicy;
 }
 
 export class Miku extends Cormini {
   private readonly emotionPolicy: () => EmotionPolicy;
+  private readonly toolProtocolPolicy: () => ToolProtocolPolicy;
   private state: EmotionState = initialEmotion();
 
   constructor(opts: MikuOptions) {
     super(opts);
     this.emotionPolicy = opts.emotion ?? ((): EmotionPolicy => ({ enabled: true, maxStepPerTurn: 0.3, decayScale: 1 }));
+    this.toolProtocolPolicy = opts.toolProtocol ?? ((): ToolProtocolPolicy => ({ enabled: false }));
   }
 
   /** 状态住在人格状态袋:进程重启后接着上一次的心情。 */
@@ -71,6 +87,25 @@ export class Miku extends Cormini {
 
   protected override segmentTitles(): Record<string, string> {
     return { ...super.segmentTitles(), 'persona.emotion': 'EMOTION' };
+  }
+
+  /**
+   * 工具表接在最后一段之后。段的数量与顺序本来写在 `PREFIX.md` 里,这里例外:这一段有没有
+   * 取决于部署,写在模板里会让关掉它的部署留下一个空段。
+   */
+  override async systemSegments(ctx: SystemPrefixContext): Promise<PrefixSegment[]> {
+    const segments = await super.systemSegments(ctx);
+    if (!this.toolProtocolPolicy().enabled) return segments;
+    const text = renderToolProtocol(this.mainTools());
+    return text ? [...segments, { title: 'TOOLS', text }] : segments;
+  }
+
+  /**
+   * main session 此刻装上的全部工具。取自 `declareSessions()` 而不是自己再拼一份:
+   * 两处各写一份清单迟早会不一致,而前缀里写错工具名等于教模型调一个不存在的工具。
+   */
+  private mainTools(): ToolDef[] {
+    return this.declareSessions().find((session) => session.id === MAIN)?.tools() ?? [];
   }
 
   /**
