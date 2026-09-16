@@ -74,3 +74,41 @@ export const MIKU_TOOL_PROTOCOL_CONFIG_GROUP: ConfigGroup = {
     },
   },
 };
+
+/**
+ * memo 两层的容量。常驻层的全文每轮都在前缀里,active 层只列文件名,所以常驻要小得多。
+ *
+ * 容量是机械规则,所以硬拦而不是劝告:满了回执直接说清现状与出路(`move_file` 下沉一条)。
+ * 默认值在 `index.ts` 的 `defaults()` 里,不写在 schema 上。
+ */
+export const MIKU_MEMO_CONFIG_GROUP: ConfigGroup = {
+  id: 'miku-memo',
+  owner: 'persona',
+  schema: {
+    type: 'object',
+    title: '备忘容量',
+    description: 'memo 常驻区与 active 区的条数上限;满了要靠 move_file 手动下沉。',
+    properties: {
+      'memo.residentCap': {
+        type: 'integer',
+        title: '常驻条数',
+        minimum: 1,
+        maximum: 50,
+        multipleOf: 1,
+        'x-suffix': '条',
+        'x-hot': true,
+        description: 'MEMORY 2 常驻区容量;这一层的全文每轮都进前缀,所以它是前缀预算的一部分。',
+      },
+      'memo.activeCap': {
+        type: 'integer',
+        title: 'active 条数',
+        minimum: 1,
+        maximum: 200,
+        multipleOf: 1,
+        'x-suffix': '条',
+        'x-hot': true,
+        description: 'memo/active/ 区容量(前缀只列文件名那一层)。',
+      },
+    },
+  },
+};

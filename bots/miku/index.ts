@@ -11,8 +11,10 @@ import { MIKU_CONTEXT_DEFAULTS, Miku, type EmotionPolicy, type ToolProtocolPolic
 import {
   MIKU_CONTEXT_CONFIG_GROUP,
   MIKU_EMOTION_CONFIG_GROUP,
+  MIKU_MEMO_CONFIG_GROUP,
   MIKU_TOOL_PROTOCOL_CONFIG_GROUP,
 } from './persona/config.ts';
+import type { MemoCaps } from './persona/memoTiers.ts';
 import type { ContextStagePolicy } from '../cormini/persona/persona.ts';
 
 const HERE = resolve(import.meta.dirname);
@@ -32,6 +34,8 @@ export interface MikuConfig extends CoreConfig {
   rounds: { soft: number; hard: number };
   emotion: EmotionPolicy;
   toolProtocol: ToolProtocolPolicy;
+  /** memo 两层的容量上限。 */
+  memo: MemoCaps;
   tick: {
     /** null disables baseline wakeups. */
     intervalMinutes: number | null;
@@ -58,6 +62,7 @@ function build(loaded: LoadedConfig<MikuConfig>, worlds: World[]): BotParts<Miku
     // 现读:控制台上改完即生效,不用重启。
     emotion: () => cfg.emotion,
     toolProtocol: () => cfg.toolProtocol,
+    memo: () => cfg.memo,
     tickDelayMs: () =>
       cfg.tick.intervalMinutes === null ? null : cfg.tick.intervalMinutes * 60_000,
   });
@@ -71,7 +76,12 @@ function build(loaded: LoadedConfig<MikuConfig>, worlds: World[]): BotParts<Miku
       persona.stopRhythm();
     },
     console: {
-      configGroups: [MIKU_CONTEXT_CONFIG_GROUP, MIKU_EMOTION_CONFIG_GROUP, MIKU_TOOL_PROTOCOL_CONFIG_GROUP],
+      configGroups: [
+        MIKU_CONTEXT_CONFIG_GROUP,
+        MIKU_EMOTION_CONFIG_GROUP,
+        MIKU_MEMO_CONFIG_GROUP,
+        MIKU_TOOL_PROTOCOL_CONFIG_GROUP,
+      ],
       // 阶段预算与软预警线(终端页上下文圈的分母与黄线);计数与物理上限由 core 报
       status: () => ({
         context: { maxTokens: cfg.context.maxTokens, softRatio: cfg.context.softRatio },
@@ -101,6 +111,8 @@ const definition: BotDefinition<MikuConfig> = {
     emotion: { enabled: true, maxStepPerTurn: 0.3, decayScale: 1 },
     // 端点收不到请求体的 `tools` 时,部署把它打开。默认关:能投递声明的端点不需要重述。
     toolProtocol: { enabled: false },
+    // 常驻层的全文每轮进前缀,所以它比 active 小一个量级。7 条约是 7 份短备忘。
+    memo: { residentCap: 7, activeCap: 21 },
     tick: { intervalMinutes: null },
   } as unknown as MikuConfig),
   build,

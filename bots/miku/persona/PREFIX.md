@@ -4,4 +4,4 @@
 {{worlds.envPrompts}}
 {{persona.emotion}}
 {{persona.memoryNote}}
-{{persona.workspace | Your workspace is empty.}}
+{{persona.memory}}

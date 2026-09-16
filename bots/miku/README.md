@@ -2,20 +2,39 @@
 
 Owner: `index.ts`
 
-初音未来。继承 `bots/cormini/` 的 Persona:工作区即记忆、Git 记账、交接、心跳与工具面都来自基类;
-本包只加人格身份、情绪状态、心跳措辞与工具协议段。
+初音未来。继承 `bots/cormini/` 的 Persona:工作区即记忆、Git 记账、交接、心跳与文件工具都来自基类;
+本包加人格身份、情绪状态、心跳措辞、工具协议段,以及记忆的分层与写纪律。
 
 | 文件 | 内容 |
 |---|---|
 | `index.ts` | `BotDefinition`:id、渠道声明、默认值、`build()` |
-| `persona/persona.ts` | `Miku extends Cormini`:前缀模板、情绪更新、心跳措辞、工具协议段 |
+| `persona/persona.ts` | `Miku extends Cormini`:前缀模板、情绪更新、心跳措辞、工具协议段、写纪律 |
 | `persona/emotion.ts` | 六维情绪:词表更新、向基线回落、映射到离散心情 |
 | `persona/toolProtocol.ts` | 工具表与调用写法:模型收不到请求体 `tools` 时的唯一来源 |
-| `persona/config.ts` | 配置组:上下文阶段、情绪、工具协议 |
-| `persona/PREFIX.md` | 前缀装配模板(基类那份加上 EMOTION 段) |
+| `persona/memoTiers.ts` | memo 三层(memo / active / archived)的视图与容量 |
+| `persona/memoryTools.ts` | 容量守门与 `move_file` |
+| `persona/memoryBand.ts` | MEMORY 段各占位符的活数据:地图、名册、memo 三层、时间 |
+| `persona/permissions.ts` | 写权限矩阵:哪个角色在哪个区域能做什么 |
+| `persona/roster.ts` | 从 `people/*.md` 抽名册 |
+| `persona/MEMORY.md` | MEMORY 段的模板:引导语与空态措辞 |
+| `persona/config.ts` | 配置组:上下文阶段、情绪、备忘容量、工具协议 |
+| `persona/PREFIX.md` | 前缀装配模板(基类那份加上 EMOTION 与 MEMORY 段) |
 | `persona/CONSTITUTION.seed.md` | 出厂宪法:身份、性格、说话方式、边界 |
 | `persona/ORIENTATION.md` | 存在方式自述 |
 | `worlds/terminal/ENV_PROMPT.md` | 终端通道的环境提示词覆盖 |
+
+## 记忆
+
+工作区就是记忆,分三层:
+
+- `note/` 她的笔记,自由写;`people/` 人物档案,**只许追加**,改名与删除留给梦;
+- `memo/` 时间性工作记忆。常驻层的全文每轮进前缀,`memo/active/` 只列文件名,
+  `memo/archived/` 只报条数。两层各有容量上限(`memo.residentCap` / `memo.activeCap`),
+  **满了不会自动下沉**:回执会说清现状与出路,她得自己用 `move_file` 挪一条下去。
+- `CONSTITUTION.md` 清醒时只读,梦可以改它的内容但不能改名或删除。
+
+容量与写的边界是机械规则,所以硬拦而不是劝告;拒绝理由是一句话,原样回到她手上。
+矩阵按两条认知路径写全(`main` / `dream`),梦那一路的 session 由梦那一步声明。
 
 ## 工具协议
 

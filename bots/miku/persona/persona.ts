@@ -1,9 +1,10 @@
 /**
  * 初音未来。继承 `Cormini`:工作区即记忆、Git 记账、交接与心跳都沿用基类。
  *
- * 差异是这几处:自己那份前缀模板、情绪状态、心跳措辞、工具协议段,以及暴露给控制台的状态快照。
- * 权限矩阵与梦在后续步骤里按同一手法覆写 `writeGuard` 与 `declareSessions`。
+ * 差异是这几处:自己那份前缀模板、情绪状态、心跳措辞、工具协议段、MEMORY 段与写纪律,
+ * 以及暴露给控制台的状态快照。梦在后续步骤里按同一手法覆写 `declareSessions`。
  */
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
@@ -13,7 +14,9 @@ import type {
   SystemPrefixContext,
   ToolDef,
 } from 'cortico/core/types.ts';
+import { renderTemplate } from 'cortico/core/template.ts';
 import { Cormini, MAIN, type CorminiOptions, type ContextStagePolicy } from '../../cormini/persona/persona.ts';
+import { normalizeWorkspacePath } from '../../cormini/persona/memory.ts';
 import {
   analyzeAffect,
   applyDeltas,
@@ -23,12 +26,19 @@ import {
   initialEmotion,
   type EmotionState,
 } from './emotion.ts';
+import { MemoTiers, type MemoCaps } from './memoTiers.ts';
+import { memoryVars } from './memoryBand.ts';
+import { memoCapGuard, moveFileTool } from './memoryTools.ts';
+import { asPersonaRole, checkAccess } from './permissions.ts';
 import { renderToolProtocol } from './toolProtocol.ts';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
 
 /** 人格状态袋里的键。Core 只负责原子持久化,不解释内容。 */
 const EMOTION_STATE_KEY = 'emotion';
+
+/** 开工时就摆好的目录:分层是规矩,不该等她自己想起来建。 */
+const WORKSPACE_DIRS = ['note', 'memo', 'memo/active', 'memo/archived', 'people'];
 
 /** 阶段预算默认值;首次见面那段锚由部署的 `prompts/FIRST_TURN_*.md` 提供,缺文件就不送。 */
 export const MIKU_CONTEXT_DEFAULTS: ContextStagePolicy = {
@@ -54,17 +64,27 @@ export interface MikuOptions extends CorminiOptions {
   emotion?: () => EmotionPolicy;
   /** 工具协议裁量,每次现读;不给 = 不带工具表。 */
   toolProtocol?: () => ToolProtocolPolicy;
+  /** memo 各层容量,每次现读;不给 = 默认值。 */
+  memo?: () => MemoCaps;
 }
 
 export class Miku extends Cormini {
   private readonly emotionPolicy: () => EmotionPolicy;
   private readonly toolProtocolPolicy: () => ToolProtocolPolicy;
+  private readonly memoCaps: () => MemoCaps;
   private state: EmotionState = initialEmotion();
 
   constructor(opts: MikuOptions) {
     super(opts);
     this.emotionPolicy = opts.emotion ?? ((): EmotionPolicy => ({ enabled: true, maxStepPerTurn: 0.3, decayScale: 1 }));
     this.toolProtocolPolicy = opts.toolProtocol ?? ((): ToolProtocolPolicy => ({ enabled: false }));
+    this.memoCaps = opts.memo ?? ((): MemoCaps => ({ residentCap: 7, activeCap: 21 }));
+    this.memory.ensureDirs(WORKSPACE_DIRS);
+  }
+
+  /** 每次现读容量:控制台上改完即生效,所以视图也每次重建(构造不碰盘)。 */
+  private memo(): MemoTiers {
+    return new MemoTiers(this.memory, this.memoCaps());
   }
 
   /** 状态住在人格状态袋:进程重启后接着上一次的心情。 */
@@ -82,11 +102,51 @@ export class Miku extends Cormini {
   }
 
   protected override prefixVars(ctx: SystemPrefixContext): Record<string, string> {
-    return { ...super.prefixVars(ctx), 'persona.emotion': emotionBlock(this.state) };
+    return {
+      ...super.prefixVars(ctx),
+      'persona.emotion': emotionBlock(this.state),
+      'persona.memory': this.memoryBand(ctx),
+    };
   }
 
   protected override segmentTitles(): Record<string, string> {
-    return { ...super.segmentTitles(), 'persona.emotion': 'EMOTION' };
+    return { ...super.segmentTitles(), 'persona.emotion': 'EMOTION', 'persona.memory': 'MEMORY' };
+  }
+
+  /** MEMORY 段:模板在 `MEMORY.md`,活数据由 `memoryVars` 算。现读,写完即生效。 */
+  private memoryBand(ctx: { now: Date; timezone: string }): string {
+    return renderTemplate(readFileSync(join(HERE, 'MEMORY.md'), 'utf8'), memoryVars(this.memory, this.memo(), ctx)).trim();
+  }
+
+  /** 控制台各占位符旁注用;与 `prefixVars` 同源,免得两处各写一份。 */
+  override promptVarValues(ctx?: { now: Date; timezone: string }): Record<string, string> {
+    const at = ctx ?? { now: new Date(), timezone: 'UTC' };
+    return { ...super.promptVarValues(at), 'persona.memory': this.memoryBand(at) };
+  }
+
+  /** 文件工具之上加 `move_file`:memo 层间搬运是层满了之后唯一的出路。 */
+  protected override tools(): ToolDef[] {
+    return [
+      ...super.tools(),
+      moveFileTool({
+        ws: this.memory,
+        guard: (op, path, role) => this.writeGuard(op, path, role),
+        capGuard: (to, from) => memoCapGuard(this.memory, this.memo(), to, from),
+      }),
+    ];
+  }
+
+  /** 写入先过权限矩阵,再过 memo 容量。拒绝理由原样回到她手上。 */
+  protected override writeGuard(
+    op: 'write' | 'append' | 'rename' | 'delete',
+    path: string,
+    role: string,
+  ): string | null {
+    const rel = normalizeWorkspacePath(path);
+    const verdict = checkAccess(asPersonaRole(role), op, rel);
+    if (!verdict.ok) return verdict.reason;
+    if (op === 'write' || op === 'append') return memoCapGuard(this.memory, this.memo(), rel);
+    return null;
   }
 
   /**
