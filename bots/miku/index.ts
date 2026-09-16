@@ -10,11 +10,13 @@ import type { TerminalConfigSection } from 'cortico/worlds/terminal/config.ts';
 import { MIKU_CONTEXT_DEFAULTS, Miku, type EmotionPolicy, type ToolProtocolPolicy } from './persona/persona.ts';
 import {
   MIKU_CONTEXT_CONFIG_GROUP,
+  MIKU_DREAM_CONFIG_GROUP,
   MIKU_EMOTION_CONFIG_GROUP,
   MIKU_MEMO_CONFIG_GROUP,
   MIKU_TOOL_PROTOCOL_CONFIG_GROUP,
 } from './persona/config.ts';
 import type { MemoCaps } from './persona/memoTiers.ts';
+import type { DreamPolicy } from './persona/persona.ts';
 import type { ContextStagePolicy } from '../cormini/persona/persona.ts';
 
 const HERE = resolve(import.meta.dirname);
@@ -36,6 +38,8 @@ export interface MikuConfig extends CoreConfig {
   toolProtocol: ToolProtocolPolicy;
   /** memo 两层的容量上限。 */
   memo: MemoCaps;
+  /** 梦的轮数上限。 */
+  dream: DreamPolicy;
   tick: {
     /** null disables baseline wakeups. */
     intervalMinutes: number | null;
@@ -63,6 +67,10 @@ function build(loaded: LoadedConfig<MikuConfig>, worlds: World[]): BotParts<Miku
     emotion: () => cfg.emotion,
     toolProtocol: () => cfg.toolProtocol,
     memo: () => cfg.memo,
+    dream: () => cfg.dream,
+    // 梦算自己的预算时要和 core 用同一份:留着思维链就多花 token。
+    keepPastThinking: () => cfg.context.keepPastThinking,
+    timezone: () => cfg.timezone,
     tickDelayMs: () =>
       cfg.tick.intervalMinutes === null ? null : cfg.tick.intervalMinutes * 60_000,
   });
@@ -80,12 +88,14 @@ function build(loaded: LoadedConfig<MikuConfig>, worlds: World[]): BotParts<Miku
         MIKU_CONTEXT_CONFIG_GROUP,
         MIKU_EMOTION_CONFIG_GROUP,
         MIKU_MEMO_CONFIG_GROUP,
+        MIKU_DREAM_CONFIG_GROUP,
         MIKU_TOOL_PROTOCOL_CONFIG_GROUP,
       ],
       // 阶段预算与软预警线(终端页上下文圈的分母与黄线);计数与物理上限由 core 报
       status: () => ({
         context: { maxTokens: cfg.context.maxTokens, softRatio: cfg.context.softRatio },
         emotion: persona.emotionState(),
+        dream: persona.dreamStatus(),
       }),
     },
   };
@@ -113,6 +123,8 @@ const definition: BotDefinition<MikuConfig> = {
     toolProtocol: { enabled: false },
     // 常驻层的全文每轮进前缀,所以它比 active 小一个量级。7 条约是 7 份短备忘。
     memo: { residentCap: 7, activeCap: 21 },
+    // 整理是收束动作:轮数给多了容易把工作区改乱。
+    dream: { maxRounds: 8 },
     tick: { intervalMinutes: null },
   } as unknown as MikuConfig),
   build,

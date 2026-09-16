@@ -19,6 +19,7 @@ export const MEMORY_VAR_DECLS: readonly PromptVarDecl[] = [
   { name: 'memory.memoResident', description: '常驻 memo 的全文,含 ── memo/x ── 分隔行。', multiline: true },
   { name: 'memory.memoActive', description: 'memo/active/ 里的文件名(只列名不列正文)。' },
   { name: 'memory.memoArchivedCount', description: 'memo/archived/ 里的归档条数。' },
+  { name: 'memory.emergences', description: '最近几场梦的浮现,每行一条。', multiline: true },
   { name: 'memory.now', description: '前缀组装那一刻的时间。**在两次前缀重建之间是冻结的**。' },
   { name: 'memory.timezone', description: '时区名。' },
 ];
@@ -36,6 +37,8 @@ export function memoryVars(
   ws: GitWorkspaceMemory,
   memo: MemoTiers,
   ctx: { now: Date; timezone: string },
+  /** 最近几场梦的浮现(MEMORY 3)。 */
+  emergences: readonly string[],
 ): Record<string, string> {
   return {
     'memory.tree': workspaceMap(ws),
@@ -43,6 +46,7 @@ export function memoryVars(
     'memory.memoResident': memo.residentBodies(),
     'memory.memoActive': memo.activeFiles().map((name) => `「${name}」`).join('、'),
     'memory.memoArchivedCount': String(memo.archivedCount()),
+    'memory.emergences': emergences.map((text) => `- ${text}`).join('\n'),
     'memory.now': nowIso(ctx.timezone, ctx.now),
     'memory.timezone': ctx.timezone,
   };

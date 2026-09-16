@@ -9,12 +9,16 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
   CoreApi,
+  ContextHandoffResult,
   EventEnvelope,
   PrefixSegment,
+  SessionDecl,
   SystemPrefixContext,
   ToolDef,
 } from 'cortico/core/types.ts';
+import type { ContextRecord } from 'cortico/protocol/open-responses/context.ts';
 import { renderTemplate } from 'cortico/core/template.ts';
+import { hasRole } from 'cortico/protocol/open-responses/context-helpers.ts';
 import { Cormini, MAIN, type CorminiOptions, type ContextStagePolicy } from '../../cormini/persona/persona.ts';
 import { normalizeWorkspacePath } from '../../cormini/persona/memory.ts';
 import {
@@ -27,6 +31,7 @@ import {
   type EmotionState,
 } from './emotion.ts';
 import { MemoTiers, type MemoCaps } from './memoTiers.ts';
+import { Dream, DREAM } from './dream.ts';
 import { forgetTool } from './forget.ts';
 import { memoryVars } from './memoryBand.ts';
 import { memoCapGuard, moveFileTool } from './memoryTools.ts';
@@ -60,6 +65,12 @@ export interface ToolProtocolPolicy {
   enabled: boolean;
 }
 
+/** 梦的裁量。 */
+export interface DreamPolicy {
+  /** 梦这一场的轮数上限。 */
+  maxRounds: number;
+}
+
 export interface MikuOptions extends CorminiOptions {
   /** 情绪裁量,每次现读;不给 = 默认值。 */
   emotion?: () => EmotionPolicy;
@@ -67,12 +78,28 @@ export interface MikuOptions extends CorminiOptions {
   toolProtocol?: () => ToolProtocolPolicy;
   /** memo 各层容量,每次现读;不给 = 默认值。 */
   memo?: () => MemoCaps;
+  /** 梦的裁量,每次现读;不给 = 默认值。 */
+  dream?: () => DreamPolicy;
+  /** 请求里是否保留历史思维链;梦算预算时要它,与 core 的同一份配置。 */
+  keepPastThinking?: () => boolean;
+  /** 时区名;梦写时间用。基类没有这个访问器,前缀装配时才拿得到,所以由部署注入。 */
+  timezone?: () => string;
 }
+
+/** 梦留下的浮现只留最近几条:它是反射,不是流水账。 */
+const EMERGENCE_KEEP = 3;
+
+/** 人格状态袋里的浮现键。与情绪状态同住一个袋子,Core 只负责原子持久化。 */
+const EMERGENCE_STATE_KEY = 'emergences';
 
 export class Miku extends Cormini {
   private readonly emotionPolicy: () => EmotionPolicy;
   private readonly toolProtocolPolicy: () => ToolProtocolPolicy;
   private readonly memoCaps: () => MemoCaps;
+  private readonly dreamPolicy: () => DreamPolicy;
+  private readonly keepPastThinking: () => boolean;
+  private readonly tz: () => string;
+  private dreamer: Dream | null = null;
   private state: EmotionState = initialEmotion();
 
   constructor(opts: MikuOptions) {
@@ -80,6 +107,9 @@ export class Miku extends Cormini {
     this.emotionPolicy = opts.emotion ?? ((): EmotionPolicy => ({ enabled: true, maxStepPerTurn: 0.3, decayScale: 1 }));
     this.toolProtocolPolicy = opts.toolProtocol ?? ((): ToolProtocolPolicy => ({ enabled: false }));
     this.memoCaps = opts.memo ?? ((): MemoCaps => ({ residentCap: 7, activeCap: 21 }));
+    this.dreamPolicy = opts.dream ?? ((): DreamPolicy => ({ maxRounds: 8 }));
+    this.keepPastThinking = opts.keepPastThinking ?? ((): boolean => false);
+    this.tz = opts.timezone ?? ((): string => 'UTC');
     this.memory.ensureDirs(WORKSPACE_DIRS);
   }
 
@@ -88,13 +118,33 @@ export class Miku extends Cormini {
     return new MemoTiers(this.memory, this.memoCaps());
   }
 
-  /** 状态住在人格状态袋:进程重启后接着上一次的心情。 */
+  /** 状态住在人格状态袋:进程重启后接着上一次的心情。梦接上 core 之后才建。 */
   override attach(core: CoreApi): void {
     super.attach(core);
     const stored = core.personaState()[EMOTION_STATE_KEY] as EmotionState | undefined;
     if (stored && typeof stored === 'object' && typeof stored.mood === 'string' && stored.values) {
       this.state = stored;
     }
+    this.dreamer = new Dream({
+      core,
+      context: () => ({ maxTokens: this.context().maxTokens, keepPastThinking: this.keepPastThinking() }),
+      timezone: () => this.tz(),
+      dreamTools: () => this.dreamTools(),
+      handoffFile: () => this.lastHandoffFile,
+      log: core.log.child('dream'),
+      onEmergence: (text) => this.recordEmergence(text),
+    });
+  }
+
+  /** 已接线的梦;控制台的强制入梦与状态仪表用它。 */
+  get dream(): Dream {
+    if (!this.dreamer) throw new Error('Persona 尚未 attach 到 core');
+    return this.dreamer;
+  }
+
+  /** 控制台状态用的安全读取:没接线时说空闲,不抛。 */
+  dreamStatus(): { dreaming: boolean } {
+    return this.dreamer?.getStatus() ?? { dreaming: false };
   }
 
   /** 前缀模板跟着这个包走,不跟着 cormini。 */
@@ -116,7 +166,8 @@ export class Miku extends Cormini {
 
   /** MEMORY 段:模板在 `MEMORY.md`,活数据由 `memoryVars` 算。现读,写完即生效。 */
   private memoryBand(ctx: { now: Date; timezone: string }): string {
-    return renderTemplate(readFileSync(join(HERE, 'MEMORY.md'), 'utf8'), memoryVars(this.memory, this.memo(), ctx)).trim();
+    const vars = memoryVars(this.memory, this.memo(), ctx, this.emergences());
+    return renderTemplate(readFileSync(join(HERE, 'MEMORY.md'), 'utf8'), vars).trim();
   }
 
   /** 控制台各占位符旁注用;与 `prefixVars` 同源,免得两处各写一份。 */
@@ -220,6 +271,59 @@ export class Miku extends Cormini {
   /** 控制台状态快照:离散心情 + 六个连续值。 */
   emotionState(): Record<string, string> {
     return emotionSnapshot(this.state);
+  }
+
+  /**
+   * 主 session 沿用基类;梦是第二个声明。它不接收事件、不持久化,
+   * 轮数上限来自配置——梦做的是整理,不是对话。
+   */
+  override declareSessions(): SessionDecl[] {
+    const maxRounds = (): number => Math.max(2, this.dreamPolicy().maxRounds);
+    return [
+      ...super.declareSessions(),
+      {
+        id: DREAM,
+        label: '梦(交接后整理)',
+        rounds: () => ({ soft: Math.max(1, maxRounds() - 1), hard: maxRounds() }),
+        persistent: false,
+        receivesEvents: false,
+        tools: () => this.dreamTools(),
+      },
+    ];
+  }
+
+  /** 梦的工具面:全部文件工具(它要重写记忆)加只读的 World 工具(翻历史取证)。 */
+  private dreamTools(): ToolDef[] {
+    return [...this.tools(), ...this.ioTools('read')];
+  }
+
+  /**
+   * 交接前的那一幕另排进并行的梦。排在 `super.onHandoff` **之后**:
+   * 它先写下交接笔记并记下文件名,梦才读得到那一份。
+   */
+  override async onHandoff(
+    snapshot: ContextRecord[],
+    ctx: { hardTokens: number | null },
+  ): Promise<ContextHandoffResult> {
+    const result = await super.onHandoff(snapshot, ctx);
+    if (snapshot.some((m) => !hasRole(m, 'system'))) void this.dreamer?.schedule(snapshot);
+    return result;
+  }
+
+  /** MEMORY 3·反射:最近几场梦留下的话,只留最近几条。 */
+  emergences(): string[] {
+    const raw = this.core?.personaState()[EMERGENCE_STATE_KEY];
+    return Array.isArray(raw) ? raw.filter((text): text is string => typeof text === 'string') : [];
+  }
+
+  /** 梦的浮现落进人格状态袋,并作为内部事件送到醒来那一侧。 */
+  private recordEmergence(text: string): void {
+    const core = this.core;
+    if (!core) return;
+    const tagged = `[surfaced from dream] ${text}`;
+    core.personaState()[EMERGENCE_STATE_KEY] = [...this.emergences(), tagged].slice(-EMERGENCE_KEEP);
+    core.savePersonaState();
+    core.injectInternal(tagged, 'emergence');
   }
 
   private persist(): void {

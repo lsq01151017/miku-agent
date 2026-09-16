@@ -112,3 +112,30 @@ export const MIKU_MEMO_CONFIG_GROUP: ConfigGroup = {
     },
   },
 };
+
+/**
+ * 梦。交接之后从交接前的快照整理工作区,轮数上限管的是"整理到什么程度为止"。
+ *
+ * 它跑在当前端点上(fork 用活动端点的模型与窗口),所以预算与主 session 同一份。
+ */
+export const MIKU_DREAM_CONFIG_GROUP: ConfigGroup = {
+  id: 'miku-dream',
+  owner: 'persona',
+  schema: {
+    type: 'object',
+    title: '梦',
+    description: '交接后整理记忆的那一场;轮数上限决定它最多走多少步。',
+    properties: {
+      'dream.maxRounds': {
+        type: 'integer',
+        title: '轮数上限',
+        minimum: 2,
+        maximum: 60,
+        multipleOf: 1,
+        'x-suffix': '轮',
+        'x-hot': true,
+        description: '梦这一场的硬上限。整理是收束动作,轮数越多越容易把工作区改乱。',
+      },
+    },
+  },
+};
