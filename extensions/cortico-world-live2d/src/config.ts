@@ -1,0 +1,91 @@
+/**
+ * `worlds.live2d` 的配置段、默认值与配置组。
+ *
+ * 目录型的键以 `Dir` 结尾,时长以 `Ms` 结尾;开关是段内的 `enabled`。渲染服务只绑回环地址,
+ * 与部署的控制台同一纪律:形象页不该被局域网里的别人看见。
+ */
+import type { ConfigGroup } from 'cortico/core/types.ts';
+import type { WorldSection } from 'cortico/world.ts';
+
+export interface Live2DConfigSection extends WorldSection {
+  /** 渲染服务端口;只绑 127.0.0.1。占用时向上找,最多 5 个。 */
+  port: number;
+  /** 素材包目录(params/clips/vocab)。相对路径按 bot 代码包解析。 */
+  packDir: string;
+  /** 播放器库目录:pixi、Cubism Core、cubism4 三个文件所在的 js/ 的上一级。 */
+  webDir: string;
+  /** 模型目录,内含 `.model3.json`。 */
+  modelDir: string;
+  /** 模型入口文件名;留空 = 用目录里唯一的那个 `.model3.json`。 */
+  modelFile: string;
+  /** state 片段保持多久后开始淡出。 */
+  stateHoldMs: number;
+  /** 淡出时长。 */
+  stateFadeMs: number;
+}
+
+export const LIVE2D_DEFAULTS: Live2DConfigSection = {
+  enabled: false,
+  port: 7795,
+  packDir: 'vtuber-pack',
+  webDir: '',
+  modelDir: '',
+  modelFile: '',
+  stateHoldMs: 25_000,
+  stateFadeMs: 8_000,
+};
+
+export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
+  id: 'live2d',
+  owner: 'world:live2d',
+  schema: {
+    type: 'object',
+    title: 'Live2D 形象',
+    description: '形象由内部状态与她说的话共同驱动;这一页配素材与渲染服务。',
+    properties: {
+      port: {
+        type: 'integer',
+        title: '渲染端口',
+        minimum: 1024,
+        maximum: 65535,
+        description: '只绑 127.0.0.1。端口被占用时向上找,最多 5 个。',
+      },
+      'packDir': {
+        type: 'string',
+        title: '素材包目录',
+        description: '含 params.json / clips.json / vocab.json。相对路径按 bot 代码包解析。',
+      },
+      'webDir': {
+        type: 'string',
+        title: '播放器库目录',
+        description: '里面有 js/pixi.min.js、js/live2dcubismcore.min.js、js/cubism4.min.js。',
+      },
+      'modelDir': {
+        type: 'string',
+        title: '模型目录',
+        description: '含 .model3.json 的目录;模型体积大且多带分发限制,不进版本库。',
+      },
+      'modelFile': {
+        type: 'string',
+        title: '模型入口文件',
+        description: '留空 = 用模型目录里唯一的那个 .model3.json;多于一个时必须点名。',
+      },
+      'stateHoldMs': {
+        type: 'integer',
+        title: '表情保持',
+        minimum: 1000,
+        maximum: 600_000,
+        'x-suffix': 'ms',
+        description: '一个表情/姿态压住多久后开始淡出。基线不参与淡出,它一直在。',
+      },
+      'stateFadeMs': {
+        type: 'integer',
+        title: '淡出时长',
+        minimum: 0,
+        maximum: 120_000,
+        'x-suffix': 'ms',
+        description: '淡出用的时间;太短会显得抽一下。',
+      },
+    },
+  },
+};

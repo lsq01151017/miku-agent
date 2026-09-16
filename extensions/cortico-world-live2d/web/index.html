@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>初音未来 · Live2D</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #10161a; overflow: hidden; }
+  canvas { display: block; }
+  #conn {
+    position: fixed; left: 12px; top: 12px; padding: 4px 10px; border-radius: 999px;
+    font: 12px/1.6 system-ui, sans-serif; color: #cfe; background: #1d2a30; opacity: .85;
+  }
+  #conn.on { background: #17403a; color: #8ff0dc; }
+  #why {
+    position: fixed; left: 12px; bottom: 12px; right: 12px; padding: 8px 12px; border-radius: 8px;
+    font: 12px/1.7 ui-monospace, monospace; color: #ffd9d9; background: #40191d; display: none;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="conn">连接中…</div>
+<div id="why"></div>
+
+<!-- 三个库由本扩展的渲染服务从配置的播放器库目录转发;应用脚本在 /app.js。 -->
+<script src="/lib/js/pixi.min.js"></script>
+<script src="/lib/js/live2dcubismcore.min.js"></script>
+<script src="/lib/js/cubism4.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

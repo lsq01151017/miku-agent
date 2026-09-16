@@ -16,6 +16,7 @@ import {
   MIKU_TOOL_PROTOCOL_CONFIG_GROUP,
 } from './persona/config.ts';
 import type { MemoCaps } from './persona/memoTiers.ts';
+import type { Values } from './persona/emotion.ts';
 import type { DreamPolicy } from './persona/persona.ts';
 import type { ContextStagePolicy } from '../cormini/persona/persona.ts';
 
@@ -25,10 +26,23 @@ const HERE = resolve(import.meta.dirname);
 const ORIENTATION_FILE = resolve(HERE, 'persona/ORIENTATION.md');
 
 /**
- * 这个Persona为之设计的渠道。表现层 World 在接入后再加进这里;bilibili、QQ、Minecraft
+ * 这个 Persona 为之设计的渠道。表现层接进来后加进这里;bilibili、QQ、Minecraft
  * 这些渠道不声明:她的活动范围只有终端与自己的形象。
  */
-const DECLARES: readonly WorldDeclaration[] = ['terminal'];
+const DECLARES: readonly WorldDeclaration[] = ['terminal', 'live2d'];
+
+/**
+ * 形象层拿到内部状态的入口。
+ *
+ * World 扩展的形状归它自己的包,人格包只知道"有个 live2d 渠道,它可能收内部状态",
+ * 所以这里按可选方法问一句:扩展没装或没这个方法是空转,不影响挂载。
+ */
+function emotionSink(worlds: readonly World[]): (values: Values) => void {
+  const live2d = worlds.find((world) => world.id === 'live2d') as
+    | { setInternalState?: (values: Values) => void }
+    | undefined;
+  return (values) => live2d?.setInternalState?.(values);
+}
 
 export interface MikuConfig extends CoreConfig {
   /** 阶段长度四项归Persona,摘思维链归 core;同住 context 段。 */
@@ -71,6 +85,7 @@ function build(loaded: LoadedConfig<MikuConfig>, worlds: World[]): BotParts<Miku
     // 梦算自己的预算时要和 core 用同一份:留着思维链就多花 token。
     keepPastThinking: () => cfg.context.keepPastThinking,
     timezone: () => cfg.timezone,
+    onEmotion: emotionSink(worlds),
     tickDelayMs: () =>
       cfg.tick.intervalMinutes === null ? null : cfg.tick.intervalMinutes * 60_000,
   });
