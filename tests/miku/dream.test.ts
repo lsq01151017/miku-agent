@@ -161,4 +161,37 @@ describe('梦的执行', () => {
     await dream.schedule(snapshot());
     expect(second).toContain('already surfaced');
   });
+
+  it('没 surface 就要最后一次机会:整轮只调工具、一字未写时也要提醒', async () => {
+    const seen: ForkOptions[] = [];
+    await makeDream({ seen, surfaceText: null }).schedule(snapshot());
+    const fork = seen[0]!;
+    // 关键:提醒条件不看"写过正文"。参考实现看它,于是全程调工具的那场梦拿不到最后一次机会。
+    expect(fork.nudge!.when('')).toBe(true);
+    expect(fork.nudge!.when('我读了几个文件,改了两处')).toBe(true);
+  });
+
+  it('已经 surface 过就不再提醒', async () => {
+    const seen: ForkOptions[] = [];
+    const core = fakeCore(null, seen);
+    (core as unknown as { spawnFork: (o: ForkOptions) => Promise<string> }).spawnFork = async (opts: ForkOptions) => {
+      seen.push(opts);
+      const surface = opts.tools!.find((tool) => tool.name === 'surface')!;
+      await surface.handler({ text: '整理完了' }, {} as never);
+      expect(opts.stopWhen!()).toBe(true);
+      expect(opts.nudge!.when('')).toBe(false);
+      return '';
+    };
+    const dream = new Dream({
+      core,
+      context: () => ({ maxTokens: 20000, keepPastThinking: false }),
+      timezone: () => 'Asia/Shanghai',
+      dreamTools: () => [writeTool],
+      handoffFile: () => null,
+      log: nullLogger(),
+      onEmergence: () => {},
+    });
+    await dream.schedule(snapshot());
+    expect(seen).toHaveLength(1);
+  });
 });

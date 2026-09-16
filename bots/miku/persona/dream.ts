@@ -131,8 +131,14 @@ export class Dream {
         stopWhen: () => surfaced.text !== null,
         wrapUpHint: '收尾:值得留一段睡眠摘要就现在调 surface,否则安静结束。',
         nudge: {
-          when: (lastContent) => surfaced.text === null && lastContent.trim().length > 0,
-          message: '[system] 你写下的正文没有落到醒来那一侧。值得说就调一次 surface,否则安静结束。',
+          // 只要还没 surface 就要这一轮。参考实现的条件是"写过正文才提醒",那是给以正文收尾的
+          // 模型写的;这场梦整轮都在调工具、一个字没写时,按旧条件它连最后一次机会都拿不到。
+          when: () => surfaced.text === null,
+          // 这一轮只剩一个动作。实测失手的场次都是用正文收尾(「改完这两处就 surface」),
+          // 而"下一轮不调工具"就等于这一场结束,所以这里把话说死。
+          message: '[system] 这一轮只剩一个动作:调 surface,把这一场值得带回醒着那一侧的写成一段'
+            + '(第一人称,只说结论)。不要再调别的工具,也不要用正文代替它——'
+            + '不调 surface,醒着的那一侧这一场什么都收不到。确实一件都没改,就调 surface 说明没有。',
         },
       });
       log.info('梦结束', {
