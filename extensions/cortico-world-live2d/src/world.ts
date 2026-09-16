@@ -20,6 +20,13 @@ import { fileURLToPath } from 'node:url';
 import type { OutputTap, ToolDef, World, WorldConsoleDecl, WorldHost } from 'cortico/core/types.ts';
 import type { WorldContext } from 'cortico/world.ts';
 import { baselineChannels, EMOTION_BASELINE, type EmotionValues } from './baseline.ts';
+import {
+  parseParamMap,
+  resolveChannels,
+  unmappedChannels,
+  verifyAgainstModel,
+  type ResolvedChannels,
+} from './channels.ts';
 import { loadPack, type Pack } from './pack.ts';
 import { Performance } from './performance.ts';
 import { LIVE2D_CONFIG_GROUP, type Live2DConfigSection } from './config.ts';
@@ -68,6 +75,8 @@ export class Live2DWorld implements World {
   private lastFrame = '';
   /** 起服务时定下来的模型入口文件名;配置问题在这一刻暴露,不留到有人打开页面。 */
   private modelFile = '';
+  /** 通道 → 本模型参数;起服务时解析定下,页面直接用。 */
+  private channels: ResolvedChannels = {};
 
   constructor(opts: Live2DWorldOptions) {
     this.cfg = opts.cfg;
@@ -170,6 +179,24 @@ export class Live2DWorld implements World {
     // 起服务之前先把配置查完:路径不对、模型点不清,都在挂载时报出来,不留到有人打开页面。
     this.modelFile = this.modelFileName();
 
+    this.channels = resolveChannels(this.pack, parseParamMap(this.cfg.paramMap));
+    const unmapped = unmappedChannels(this.channels);
+    if (unmapped.length > 0) {
+      // 报出来而不是静默跳过:包里 `losesIfMissing` 说的就是这一刻丢了什么。
+      host.log.warn('有通道没有落点(包自己说不接),这几路表演会丢', { channels: unmapped });
+    }
+    // 解析得出的名字,模型未必有:这是 `suggests` 与现实差距最要紧的一处。
+    const modelParams = this.modelParamIds();
+    if (modelParams === null) {
+      host.log.warn('读不到模型的参数表(FileReferences 里没有 DisplayInfo),通道与参数的对照没法核对');
+    } else {
+      const notInModel = verifyAgainstModel(this.channels, modelParams);
+      if (notInModel.length > 0) {
+        host.log.warn('包里建议的参数名在这份模型上不存在,这几路表演会丢;在 worlds.live2d.paramMap 里改成 '
+          + '本模型的参数名即可', { channels: notInModel });
+      }
+    }
+
     this.server = createServer((req, res) => this.handle(req, res));
     this.boundPort = await this.listen(this.cfg.port);
     this.pushTimer = setInterval(() => this.pushFrame(), PUSH_INTERVAL_MS);
@@ -222,6 +249,9 @@ export class Live2DWorld implements World {
       if (url.pathname === '/app.js') return this.sendFile(res, join(WEB_DIR, 'app.js'));
       if (url.pathname === '/pack/params.json') {
         return this.sendJson(res, this.pack?.params ?? {});
+      }
+      if (url.pathname === '/pack/channels.json') {
+        return this.sendJson(res, this.channels);
       }
       if (url.pathname === '/state') return this.openStream(res);
       if (url.pathname.startsWith('/lib/')) {
@@ -306,6 +336,28 @@ export class Live2DWorld implements World {
 
   // ── 路径与启动 ──────────────────────────────────────────────────────────────
 
+  /**
+   * 这份模型真实拥有的参数名,来自 model3 的 `DisplayInfo`(cdi3)。
+   * 读不到就返回 null——那是"没法核对",不是"没有参数"。
+   */
+  private modelParamIds(): Set<string> | null {
+    try {
+      const dir = this.resolveDir(this.cfg.modelDir, '模型');
+      const model3 = JSON.parse(readFileSync(join(dir, this.modelFile), 'utf8')) as {
+        FileReferences?: { DisplayInfo?: string };
+      };
+      const display = model3.FileReferences?.DisplayInfo;
+      if (!display) return null;
+      const cdi = JSON.parse(readFileSync(join(dir, display), 'utf8')) as {
+        Parameters?: Array<{ Id?: string }>;
+      };
+      return new Set((cdi.Parameters ?? []).map((p) => p.Id).filter((id): id is string => typeof id === 'string'));
+    } catch (error) {
+      this.host?.log.warn('读模型参数表失败', { err: String(error) });
+      return null;
+    }
+  }
+
   /** 相对路径按 bot 代码包解析:素材包随人格包走,不随部署。 */
   private resolveDir(value: string, what: string): string {
     const dir = isAbsolute(value) ? value : join(this.packageDir, value);
@@ -322,8 +374,7 @@ export class Live2DWorld implements World {
     return path;
   }
 
-  private modelFileName(): string {
-    if (this.cfg.modelFile) return this.cfg.modelFile;
+  private modelFileName(): string {    if (this.cfg.modelFile) return this.cfg.modelFile;
     const dir = this.resolveDir(this.cfg.modelDir, '模型');
     const found = readdirSync(dir).filter((name) => name.toLowerCase().endsWith('.model3.json')).sort();
     if (found.length === 1) return found[0]!;

@@ -99,6 +99,21 @@ describe('静态路由', () => {
     expect(Object.keys(params).length).toBeGreaterThan(10);
   });
 
+  it('规格化的通道表由 World 解析,页面直接用', async () => {
+    await start();
+    const channels = await (await fetch(url('/pack/channels.json'))).json() as
+      Record<string, { param: string | null; range: number[] | null }>;
+    expect(channels.FaceAngleZ!.param).toBe('ParamAngleZ');
+    expect(channels.EyeLeftX!.param).toBeNull(); // 包自己说不接
+    expect(channels.FaceAngleZ!.range).toEqual([-30, 30]);
+  });
+
+  it('部署的通道修正会出现在规格化表里', async () => {
+    await start({ paramMap: 'CheekPuff=Paramguzui' });
+    const channels = await (await fetch(url('/pack/channels.json'))).json() as Record<string, { param: string | null }>;
+    expect(channels.CheekPuff!.param).toBe('Paramguzui');
+  });
+
   it('路径越界与未知路径都不放行', async () => {
     await start();
     expect((await fetch(url('/lib/..%2F..%2Fsecret.txt'))).status).toBeGreaterThanOrEqual(400);

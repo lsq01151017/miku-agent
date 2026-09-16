@@ -21,9 +21,9 @@
     el.why.textContent = message;
   }
 
-  // 通道 → 模型参数。`suggests` 里开头的 Param* 才是参数名,其余是给人的说明。
+  // 通道 → 本模型参数,以及量程。映射由 World 解析(它知道部署的修正表),
+  // 这里只按结果写参数,不再自己猜 `suggests`。
   var channelParam = {};
-  // 通道量程,裁剪用。
   var channelRange = {};
   var model = null;
   var app = null;
@@ -31,15 +31,6 @@
   var current = {};  // 平滑后的当前值
   var speaking = false;
   var speakStart = 0;
-
-  function buildMapping(params) {
-    Object.keys(params).forEach(function (channel) {
-      var spec = params[channel] || {};
-      var hit = /^(Param[A-Za-z0-9_]+)/.exec(String(spec.suggests || ''));
-      if (hit) channelParam[channel] = hit[1];
-      if (spec.range) channelRange[channel] = spec.range;
-    });
-  }
 
   function fit() {
     if (!app) return;
@@ -52,10 +43,15 @@
       return;
     }
     try {
-      var paramsResp = await fetch('/pack/params.json', { cache: 'no-store' });
-      buildMapping(await paramsResp.json());
+      var resp = await fetch('/pack/channels.json', { cache: 'no-store' });
+      var channels = await resp.json();
+      Object.keys(channels).forEach(function (channel) {
+        var spec = channels[channel] || {};
+        if (spec.param) channelParam[channel] = spec.param;
+        if (spec.range) channelRange[channel] = spec.range;
+      });
     } catch (e) {
-      why('取 /pack/params.json 失败:' + e.message);
+      why('取 /pack/channels.json 失败:' + e.message);
       return;
     }
 

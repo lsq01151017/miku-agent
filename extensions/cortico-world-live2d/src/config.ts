@@ -18,6 +18,14 @@ export interface Live2DConfigSection extends WorldSection {
   modelDir: string;
   /** 模型入口文件名;留空 = 用目录里唯一的那个 `.model3.json`。 */
   modelFile: string;
+  /**
+   * 通道 → 本模型参数的逐条修正,写成 `通道=参数名`,逗号或换行分隔。
+   *
+   * 包里的 `suggests` 只是**建议**:这份模型的腮参数是拼音命名(`Paramguzui`),
+   * 包里建议的 `ParamCheekPuff` 在这个模型上不存在。右侧留空表示这条通道明确不接。
+   * 配置 schema 的数组只支持数字,所以这里用一条字符串。
+   */
+  paramMap: string;
   /** state 片段保持多久后开始淡出。 */
   stateHoldMs: number;
   /** 淡出时长。 */
@@ -31,6 +39,7 @@ export const LIVE2D_DEFAULTS: Live2DConfigSection = {
   webDir: '',
   modelDir: '',
   modelFile: '',
+  paramMap: '',
   stateHoldMs: 25_000,
   stateFadeMs: 8_000,
 };
@@ -64,6 +73,12 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         type: 'string',
         title: '模型目录',
         description: '含 .model3.json 的目录;模型体积大且多带分发限制,不进版本库。',
+      },
+      'paramMap': {
+        type: 'string',
+        title: '通道参数修正',
+        description: '写成「通道=参数名」，多项用逗号分隔，例如 CheekPuff=Paramguzui。'
+          + '包里的参数名只是建议；本模型的参数叫别的名字时在这里改，右侧留空表示这条通道不接。',
       },
       'modelFile': {
         type: 'string',
