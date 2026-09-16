@@ -29,9 +29,18 @@ function signature(tool: ToolSchema): string {
   return `${tool.name}(${parts.join(', ')})`;
 }
 
-/** 描述只取第一行:前缀预算是有限的,后面的实现细节模型用不到。 */
-function firstLine(description: string): string {
-  return description.split('\n').map((line) => line.trim()).find((line) => line !== '') ?? '';
+/**
+ * 描述只取第一句。
+ *
+ * 工具描述是写给"能收到结构化声明"的模型的,那里每轮只付一次;进了前缀却是每轮都在付,
+ * 而且真正的用法模型从回执里学得到。第一句说明这个工具是干什么的,足够选对工具——
+ * 参数名由签名给,细节由回执给。
+ */
+function firstSentence(description: string): string {
+  const line = description.split('\n').map((part) => part.trim()).find((part) => part !== '') ?? '';
+  // 句点必须在空白或行尾才算断句,否则省略号里的点会把句子切成半截。
+  const end = line.search(/[.。!?！？](?=\s|$)/);
+  return end === -1 ? line : line.slice(0, end + 1);
 }
 
 /** 工具表与调用写法;没有工具时返回空串,调用方据此省略整段。 */
@@ -42,7 +51,7 @@ export function renderToolProtocol(tools: readonly ToolSchema[]): string {
     '[工具] 这个端点不接收框架发出的工具声明。要做事就调用工具,调用时按下面的写法。',
     '',
     '可用工具:',
-    ...[...unique.values()].map((tool) => `- ${signature(tool)}: ${firstLine(tool.description)}`),
+    ...[...unique.values()].map((tool) => `- ${signature(tool)}: ${firstSentence(tool.description)}`),
     '',
     '调用写法:一个代码块,块里是一段 JSON。块外不要重复写同一件事。',
     '',

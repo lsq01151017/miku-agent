@@ -15,7 +15,7 @@ const terminalSend: ToolSchema = {
 
 const readTool: ToolSchema = {
   name: 'ws_read',
-  description: 'Read a file in the workspace.',
+  description: 'Read a file in the workspace. Whole file by default; give offset and limit to read a slice.',
   parameters: {
     type: 'object',
     properties: { path: { type: 'string' }, maxLines: { type: 'number' } },
@@ -31,11 +31,20 @@ function exampleBody(rendered: string): string {
 }
 
 describe('renderToolProtocol', () => {
-  it('每个工具一行:参数带类型,可选参数带问号,描述只取首行', () => {
+  it('每个工具一行:参数带类型,可选参数带问号,描述只取第一句', () => {
     const rendered = renderToolProtocol([terminalSend, readTool]);
     expect(rendered).toContain('- terminal_send(text:string): Send text to everyone connected to the terminal.');
     expect(rendered).toContain('- ws_read(path:string, maxLines?:number): Read a file in the workspace.');
     expect(rendered).not.toContain('Second line is not the summary.');
+    expect(rendered).not.toContain('give offset and limit');
+  });
+
+  it('描述只取第一句,省略号里的点不算断句', () => {
+    const rendered = renderToolProtocol([
+      { name: 'save_blob', description: 'Keep a binary you have seen (a log: handle from a [blob ...] line) in your workspace. Give the path to store it under.', parameters: { type: 'object', properties: {}, required: [] } },
+    ]);
+    expect(rendered).toContain('- save_blob(): Keep a binary you have seen (a log: handle from a [blob ...] line) in your workspace.');
+    expect(rendered).not.toContain('Give the path');
   });
 
   it('没有工具时返回空串,调用方据此省略整段', () => {
