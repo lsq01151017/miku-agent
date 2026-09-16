@@ -33,7 +33,10 @@ scratch/
 
 # 控制台装的扩展(npm 包),属部署状态。
 # 锚在仓库根上:不带斜杠会连 src/web/client/features/extensions/ 一起吞掉。
-/extensions/
+# 本仓自带的 provider 扩展随源码入库;git 无法在被排除的目录内重新纳入文件,
+# 所以先排除目录内容,再单独放开这一个包。
+/extensions/*
+!/extensions/cortico-provider-ollama/
 
 # Corti 运维目录(数据归档+复盘),不入库
 CortiV-DataAnalysis/
