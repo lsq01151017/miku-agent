@@ -203,6 +203,9 @@ export class Core<C extends CoreConfig = CoreConfig> {
       injectDeferred: (kind, render) => this.loop.injectDeferred(kind, render),
       injectExternal: (text, kind) => this.loop.injectExternal(text, kind),
       requestContextHandoff: () => this.loop.requestContextHandoff(),
+      reloadSystemPrefix: () => {
+        void this.loop.reloadSystemPrefix();
+      },
       spawnFork: (opts) => this.spawnFork(opts),
       sessionInfo: (id) => this.sessionInfo(id),
       llm: this.llm,

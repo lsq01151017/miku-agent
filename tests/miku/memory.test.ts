@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GitWorkspaceMemory } from '../../bots/cormini/persona/memory.ts';
+import { forgetTool } from '../../bots/miku/persona/forget.ts';
 import { MemoTiers } from '../../bots/miku/persona/memoTiers.ts';
 import { memoCapGuard } from '../../bots/miku/persona/memoryTools.ts';
 import { asPersonaRole, checkAccess, zoneOf } from '../../bots/miku/persona/permissions.ts';
@@ -147,6 +148,65 @@ describe('memo 容量门', () => {
     expect(memo.residentBodies()).toContain('── memo/备忘0.md ──');
     expect(memo.activeFiles()).toEqual(['A.md']);
     expect(memo.archivedCount()).toBe(1);
+  });
+});
+
+describe('forget:操作员明确要求忘记时当场生效', () => {
+  let reloads = 0;
+
+  const run = async (path: string): Promise<{ receipt: string; reloads: number }> => {
+    const tool = forgetTool({
+      ws,
+      reloadPrefix: () => {
+        reloads += 1;
+      },
+    });
+    const receipt = await tool.handler({ path }, { role: 'main' } as unknown as never);
+    return { receipt: String(receipt), reloads };
+  };
+
+  beforeEach(() => { reloads = 0; });
+
+  it('当场删掉文件,并请求重建前缀', async () => {
+    ws.writeFileAtomic('memo/秘密.md', '她答应过不告诉别人。\n');
+    const { receipt, reloads: calls } = await run('memo/秘密.md');
+    expect(receipt).toContain('[forgotten]');
+    expect(receipt).toContain('Git history');
+    expect(ws.exists('memo/秘密.md')).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  it('删掉之后名册与常驻层立刻不再有它', async () => {
+    writeFileSync(join(dir, 'people', '秘密的人.md'), '秘密的人 — 不该被记住。\n', 'utf8');
+    ws.writeFileAtomic('memo/秘密.md', '内容\n');
+    expect(buildRoster(dir)).toContain('秘密的人');
+    expect(memoWith(7, 21).residentFiles()).toContain('秘密.md');
+
+    await run('people/秘密的人.md');
+    await run('memo/秘密.md');
+
+    expect(buildRoster(dir)).not.toContain('秘密的人');
+    expect(memoWith(7, 21).residentFiles()).not.toContain('秘密.md');
+  });
+
+  it('宪法不在可忘之列,且不触发重建', async () => {
+    ws.writeFileAtomic('CONSTITUTION.md', '# 我是初音未来\n');
+    const { receipt, reloads: calls } = await run('CONSTITUTION.md');
+    expect(receipt).toContain('[forget failed]');
+    expect(ws.exists('CONSTITUTION.md')).toBe(true);
+    expect(calls).toBe(0);
+  });
+
+  it('不存在的路径与目录都拒绝,且不触发重建', async () => {
+    const missing = await run('memo/没有这条.md');
+    expect(missing.receipt).toContain('[forget failed]');
+    expect(missing.reloads).toBe(0);
+    const folder = await run('memo');
+    expect(folder.receipt).toContain('[forget failed]');
+    expect(folder.reloads).toBe(0);
+    const empty = await run('');
+    expect(empty.receipt).toContain('[forget failed]');
+    expect(empty.reloads).toBe(0);
   });
 });
 

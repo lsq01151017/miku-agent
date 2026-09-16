@@ -484,6 +484,13 @@ export interface CoreApi {
   injectExternal(text: string, kind?: string): void;
   /** 在安全轮次边界请求上下文交接；已有请求待处理时返回 false。 */
   requestContextHandoff(): boolean;
+  /**
+   * 请求重建主 session 的系统前缀。
+   *
+   * 前缀平时只在会话建立、交接与清空时重建，因为重建会让之后的请求失去前缀缓存。
+   * 改了常驻内容的 Persona 在改完后调用它：重建排在安全轮次边界，本批结束后生效。
+   */
+  reloadSystemPrefix(): void;
   /** 运行临时 session 的工具循环，返回最后一段正文。 */
   spawnFork(opts: ForkOptions): Promise<string>;
   sessionInfo(id: string): SessionInfo;

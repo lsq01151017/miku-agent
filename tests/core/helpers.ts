@@ -382,6 +382,7 @@ export function makeFakeHarnessApi(patch: Partial<FixtureHarnessApi> = {}): Core
     injectDeferred: () => {},
     injectExternal: () => {},
     requestContextHandoff: () => true,
+    reloadSystemPrefix: () => {},
     timers: {
       set: () => ({ ok: true, id: 'timer_fake' }),
       cancel: () => false,

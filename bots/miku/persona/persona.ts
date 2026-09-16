@@ -27,6 +27,7 @@ import {
   type EmotionState,
 } from './emotion.ts';
 import { MemoTiers, type MemoCaps } from './memoTiers.ts';
+import { forgetTool } from './forget.ts';
 import { memoryVars } from './memoryBand.ts';
 import { memoCapGuard, moveFileTool } from './memoryTools.ts';
 import { asPersonaRole, checkAccess } from './permissions.ts';
@@ -132,6 +133,22 @@ export class Miku extends Cormini {
         ws: this.memory,
         guard: (op, path, role) => this.writeGuard(op, path, role),
         capGuard: (to, from) => memoCapGuard(this.memory, this.memo(), to, from),
+      }),
+    ];
+  }
+
+  /**
+   * 主 session 的尾巴工具加 `forget`。它是矩阵里唯一一处越权,来源是指令而不是角色:
+   * 操作员明确要求忘记时当场生效,不等梦。
+   */
+  protected override mainTailTools(): ToolDef[] {
+    return [
+      ...super.mainTailTools(),
+      forgetTool({
+        ws: this.memory,
+        reloadPrefix: () => {
+          this.core?.reloadSystemPrefix();
+        },
       }),
     ];
   }
