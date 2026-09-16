@@ -211,16 +211,22 @@ describe('forget:操作员明确要求忘记时当场生效', () => {
 });
 
 describe('人物名册', () => {
-  it('每份档案一行:文件名作称呼,首行作概括', () => {
+  it('每份档案一行:文件名作称呼,首段正文作概括', () => {
     mkdirSync(join(dir, 'people'), { recursive: true });
     writeFileSync(join(dir, 'people', '可可.md'), '可可 — 制作人,喜欢下雨天。\n第二行不该出现。\n', 'utf8');
     writeFileSync(join(dir, 'people', '小满.md'), '', 'utf8');
     writeFileSync(join(dir, 'people', 'README.txt'), '不是档案\n', 'utf8');
     const roster = buildRoster(dir);
     expect(roster).toContain('- 可可 — 可可 — 制作人,喜欢下雨天。');
-    expect(roster).toContain('- 小满 — (档案第一行为空)');
+    expect(roster).toContain('- 小满 — (档案里没有正文)');
     expect(roster).not.toContain('第二行');
     expect(roster).not.toContain('README');
+  });
+
+  it('先写标题行的档案照样抽得出概括', () => {
+    mkdirSync(join(dir, 'people'), { recursive: true });
+    writeFileSync(join(dir, 'people', '可可.md'), '# 可可\n\n当前的称呼：可可\n一句概括：第一个告诉我名字的人。\n', 'utf8');
+    expect(buildRoster(dir)).toContain('- 可可 — 当前的称呼：可可');
   });
 
   it('没有 people/ 目录时返回空串,缺省文案交给模板', () => {

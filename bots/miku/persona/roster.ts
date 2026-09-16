@@ -1,11 +1,21 @@
 /**
- * 从 `people/*.md` 的文件名与首行生成名册。首行约定为"当前的称呼 + 一句概括"。
+ * 从 `people/*.md` 的文件名与首段生成名册。约定是"称呼 + 一句概括"。
  *
- * 名册是机械抽取的:她把人写成文件,前缀里自动出现一行。这样"记住一个人的名字"
- * 不依赖她每次都主动回忆,也不需要谁去维护一份索引。
+ * 概括取第一条既不是空行、也不是 Markdown 标题的正文——真实模型习惯先写一行 `# 名字` 再写内容,
+ * 机械层照它的写法取,而不是要求它迁就抽取器的形状。
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+/** 首个非空且非标题的行;没有就给空串。 */
+function summaryOf(text: string): string {
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    return trimmed;
+  }
+  return '';
+}
 
 /** 没有档案时返回空串,缺省文案由 MEMORY.md 提供。 */
 export function buildRoster(memoryDir: string): string {
@@ -20,13 +30,13 @@ export function buildRoster(memoryDir: string): string {
 
   return files
     .map((file) => {
-      let first = '';
+      let summary = '';
       try {
-        first = (readFileSync(join(dir, file), 'utf8').split(/\r?\n/, 1)[0] ?? '').trim();
+        summary = summaryOf(readFileSync(join(dir, file), 'utf8'));
       } catch {
-        first = '(档案读取失败)';
+        summary = '(档案读取失败)';
       }
-      return `- ${file.replace(/\.md$/i, '')} — ${first || '(档案第一行为空)'}`;
+      return `- ${file.replace(/\.md$/i, '')} — ${summary || '(档案里没有正文)'}`;
     })
     .join('\n');
 }
