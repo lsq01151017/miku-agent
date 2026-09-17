@@ -80,9 +80,23 @@
     model.scale.set(scale);
     model.anchor.set(0.5, 0.5);
     model.position.set(window.innerWidth / 2, window.innerHeight / 2);
+    // Cubism 每帧会把参数复位成模型默认值,所以定值必须写在复位之后、更新之前。
+    // 只在自己的 rAF 里写是不够的:两者顺序不定,写早了当帧就被复位掉。
+    if (model.internalModel && typeof model.internalModel.on === 'function') {
+      model.internalModel.on('beforeModelUpdate', writeOverrides);
+    }
     window.addEventListener('resize', fit);
     tick();
     listen();
+  }
+
+  /** 参数定值(例如水印开关);挂在模型的 beforeModelUpdate 上,每帧一次。 */
+  function writeOverrides() {
+    if (!model || !model.internalModel) return;
+    var core = model.internalModel.coreModel;
+    Object.keys(overrides).forEach(function (param) {
+      try { core.setParameterValueById(param, overrides[param]); } catch (e) { /* 模型没有这条参数 */ }
+    });
   }
 
   /** 把通道值写到参数上;模型没有的参数(缺件)静默跳过,那正是 losesIfMissing 说的。 */
@@ -103,10 +117,8 @@
       if (range) value = Math.min(range[1], Math.max(range[0], value));
       try { core.setParameterValueById(param, value); } catch (e) { /* 模型没有这条参数 */ }
     });
-    // 不归通道管的参数(例如水印开关):每帧照写一次,免得被表情或动作改回去。
-    Object.keys(overrides).forEach(function (param) {
-      try { core.setParameterValueById(param, overrides[param]); } catch (e) { /* 同上 */ }
-    });
+    // 兜底:即使模型没有 beforeModelUpdate 这个钩子,也在自己的帧里写一次。
+    writeOverrides();
   }
 
   /** 每帧把当前值往目标值推一点:通道是"想让它怎样",动作才像动作。 */

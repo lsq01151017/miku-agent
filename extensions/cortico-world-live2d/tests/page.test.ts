@@ -38,6 +38,10 @@ function stubBrowser(): {
   };
 
   const globals = globalThis as Record<string, unknown>;
+  // 这些全局会一直被后面的测试文件用到:进来之前先存一份,跑完原样还回去。
+  for (const key of ['document', 'window', 'requestAnimationFrame', 'PIXI', 'fetch', 'EventSource']) {
+    if (!saved.has(key)) saved.set(key, globals[key]);
+  }
   globals.document = { getElementById: (id: string) => (id === 'conn' ? conn : element()) };
   globals.window = {
     innerWidth: 800,
@@ -81,7 +85,17 @@ function stubBrowser(): {
   };
 }
 
-afterEach(() => { vi.restoreAllMocks(); });
+/** 被替身动过的全局;跑完要还回去,否则后面的测试文件会跑在替身上。 */
+const saved = new Map<string, unknown>();
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  for (const [key, value] of saved) {
+    if (value === undefined) delete (globalThis as Record<string, unknown>)[key];
+    else (globalThis as Record<string, unknown>)[key] = value;
+  }
+  saved.clear();
+});
 
 describe('播放器页面', () => {
   it('把推流帧里的通道值按映射写进模型参数,并切表情', async () => {

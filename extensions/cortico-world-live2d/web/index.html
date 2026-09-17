@@ -17,11 +17,17 @@
     font: 12px/1.7 ui-monospace, monospace; color: #ffd9d9; background: #40191d; display: none;
     white-space: pre-wrap;
   }
+  #talk {
+    position: fixed; left: 12px; bottom: 12px; padding: 6px 10px; border-radius: 8px;
+    font: 12px/1.7 system-ui, sans-serif; color: #cfe; background: #1d2a30; opacity: .85;
+  }
+  #talk a { color: #8ff0dc; }
 </style>
 </head>
 <body>
 <canvas id="stage"></canvas>
 <div id="conn">连接中…</div>
+<div id="talk">这一页只负责她的身体。<a href="http://127.0.0.1:18790/" target="_blank">在控制台的终端页跟她说话</a>,身体会跟着动。</div>
 <div id="why"></div>
 
 <!-- 三个库由本扩展的渲染服务从配置的播放器库目录转发;应用脚本在 /app.js。 -->
