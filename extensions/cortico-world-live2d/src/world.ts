@@ -204,6 +204,15 @@ export class Live2DWorld implements World {
   }
 
   /**
+   * 操作员让她做一个动作(「张嘴」「点点头」这类)。走的是同一条词表通道:她自己的台词与
+   * 操作员的吩咐落在同一套表演数据上,所以只要词表里有的动作,吩咐也能触发。
+   */
+  perform(text: string): string[] {
+    if (text === '' || this.performance === null) return [];
+    return this.performance.speak(text, Date.now());
+  }
+
+  /**
    * 她说了一句话(正文增量)。三件事:
    *   1. 把"她在说话"延长到这句话估的时长——口型跟着这个标志动;
    *   2. 把正文按整段攒起来,词被切在两个增量里也认得出来;

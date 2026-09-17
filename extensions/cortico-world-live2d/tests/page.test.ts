@@ -165,6 +165,7 @@ function stubBrowser(): {
       return {
         FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
         MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
+        MouthOpen: { param: 'ParamMouthOpenY', range: [0, 1] },
         EyeOpenLeft: { param: 'ParamEyeLOpen', range: [-1, 1] },
         EyeLeftX: { param: null, range: null },
       };
@@ -223,10 +224,10 @@ describe('播放器页面', () => {
     const node = (id: string): FakeNode => stubs.nodes.get(id)!;
 
     send({
-      channels: { FaceAngleZ: 12, MouthSmile: 0.5, EyeOpenLeft: 0.2, EyeLeftX: 0.9 },
+      channels: { FaceAngleZ: 12, MouthSmile: 0.5, MouthOpen: 0.9, EyeOpenLeft: 0.2, EyeLeftX: 0.9 },
       expression: 'blush',
       expressionToken: 1,
-      speaking: true,
+      speaking: false,
       emotion: { valence: 0.5, arousal: 0.6, bond: 0.2, loneliness: 0.1, shyness: 0.62, empathy: 0 },
       mood: '害羞',
       clips: ['nod', 'speech_onset'],
@@ -245,6 +246,8 @@ describe('播放器页面', () => {
     // 眨眼参数走加法:眨眼逻辑给 0.8,通道在它上面叠加。
     expect(last('ParamEyeLOpen')).toBeGreaterThan(0.8);
     expect(last('ParamEyeLOpen')).toBeLessThanOrEqual(1);
+    // 口型:这一段没有在说话,嘴是 World 给的(片段能让她「张嘴」)。
+    expect(last('ParamMouthOpenY')).toBeCloseTo(0.9, 6);
     // 不归通道管的参数定值每帧照写(这份部署把模型的水印开关 Param137 钉成 1)。
     expect(last('Param137')).toBe(1);
 
@@ -252,7 +255,7 @@ describe('播放器页面', () => {
     expect(node('mood').textContent).toBe('害羞');
     expect(node('expression').textContent).toBe('blush');
     expect(node('clips').textContent).toBe('nod, speech_onset');
-    expect(node('speaking').textContent).toBe('是');
+    expect(node('speaking').textContent).toBe('否');
     expect(node('clients').textContent).toBe('2');
     // 六维各一行,数字与条宽都跟着帧走。
     expect(node('bars').children).toHaveLength(6);
@@ -343,12 +346,16 @@ describe('播放器页面', () => {
     stubs.sockets[0]!.fire(JSON.stringify({ type: 'msg', from: '制作人', text: '第一句' }));
     expect(node('subtitle').textContent).toBe('在的哦');
 
-    // 底部最多留最近三行,没有滚动条可言。
-    for (const text of ['第三句', '第四句']) {
-      node('composer-input').value = text;
-      node('composer-form').fire('submit', { preventDefault: () => {} });
-    }
-    expect(node('mine').children.map((child) => child.textContent)).toEqual(['第二句', '第三句', '第四句']);
+    // 底部收起时只看得到最近一句;按「历史」展开,再按收起。
+    expect(node('mine').children.map((child) => child.textContent)).toEqual(['第一句', '第二句']);
+    expect(node('composer').className).not.toContain('expanded');
+    expect(node('btn-history').textContent).toBe('历史 2');
+    node('btn-history').fire('click');
+    expect(node('composer').className).toContain('expanded');
+    expect(node('btn-history').textContent).toBe('收起');
+    node('btn-history').fire('click');
+    expect(node('composer').className).not.toContain('expanded');
+    expect(node('btn-history').textContent).toBe('历史 2');
 
     // ── 表情按序号重放 ──────────────────────────────────────────────────────
     send({ channels: { MouthSmile: 0.5 }, expression: 'blush', expressionToken: 1, speaking: false });

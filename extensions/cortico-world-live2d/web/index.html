@@ -43,36 +43,41 @@
 
   /* 她的回答:浮在模型上方的一条扁字幕。 */
   #subtitle {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: 84px;
-    width: min(920px, calc(100vw - 48px)); padding: 10px 18px; border-radius: 12px;
-    color: var(--glass-ink); font: 16px/1.65 system-ui, sans-serif;
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 76px;
+    width: min(1080px, calc(100vw - 40px)); padding: 4px 14px; border-radius: 8px;
+    border: 0; background: rgba(10, 16, 20, 0.34);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    color: var(--glass-ink); font: 15px/1.42 system-ui, sans-serif;
     text-align: center; white-space: pre-wrap; word-break: break-word;
     opacity: 0; transition: opacity .18s ease;
     pointer-events: none;
   }
   #subtitle.on { opacity: 1; }
 
-  /* 底部输入区:扁平的,只有我发过的话与输入框,没有滚动条。 */
+  /* 底部输入区:扁平的;只留最近一句,其余收起,要用时展开。 */
   #composer {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px;
-    width: min(920px, calc(100vw - 48px)); padding: 8px 10px; border-radius: 14px;
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px;
+    width: min(1080px, calc(100vw - 40px)); padding: 7px 10px; border-radius: 14px;
     color: var(--glass-ink); font: 14px/1.5 system-ui, sans-serif;
   }
   #composer.hidden { display: none; }
   #mine {
-    display: flex; flex-direction: column; gap: 2px; padding: 2px 4px 6px;
-    font-size: 12px; color: var(--glass-dim); overflow: hidden; max-height: 62px;
+    display: flex; flex-direction: column; gap: 2px; padding: 0 4px;
+    font-size: 12px; color: var(--glass-dim); overflow: hidden; max-height: 19px;
   }
+  #composer.expanded #mine { max-height: 30vh; overflow-y: auto; padding-bottom: 6px; }
   #mine div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #mine div:last-child { color: #d7eef0; }
-  #composer form { display: flex; gap: 8px; align-items: center; }
+  #composer:not(.expanded) #mine div:not(:last-child) { display: none; }
+  #composer form { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
   #composer input {
-    flex: 1; min-width: 0; padding: 9px 12px; border-radius: 10px;
+    flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px;
     border: 1px solid var(--glass-edge); background: rgba(255, 255, 255, 0.06);
     color: var(--glass-ink); font: 14px/1.4 system-ui, sans-serif;
   }
   #composer input::placeholder { color: #8ea6ad; }
   #composer input:focus { outline: none; border-color: var(--glass-accent); }
+  #btn-history { padding: 4px 10px; border-radius: 8px; font-size: 11px; color: var(--glass-dim); }
   button {
     padding: 8px 16px; border-radius: 10px; cursor: pointer;
     border: 1px solid var(--glass-edge); background: var(--glass-bg-strong); color: var(--glass-ink);
@@ -125,6 +130,7 @@
   <div id="mine"></div>
   <form id="composer-form" autocomplete="off">
     <input id="composer-input" type="text" placeholder="对她说点什么…" aria-label="对她说点什么">
+    <button id="btn-history" type="button" title="展开我发过的话">历史</button>
     <button type="submit">说</button>
   </form>
 </div>

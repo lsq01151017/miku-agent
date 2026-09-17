@@ -28,8 +28,8 @@
   var LOOK_EYE_RANGE = 1;
   var LOOK_HEAD_DEG = 6;
 
-  /** 底部输入区只留最近几条我说过的话;字幕在她说完之后留一会儿再淡掉。 */
-  var MINE_LINES = 3;
+  /** 底部输入区留多少条历史(收起时只看得到最近一句);字幕在她说完之后留一会儿再淡掉。 */
+  var MINE_LINES = 50;
   var SUBTITLE_MS = 9000;
   var SYSTEM_SUBTITLE_MS = 6000;
   var AGENT_CHAT_PATH = '/agent/chat';
@@ -64,6 +64,7 @@
     mine: document.getElementById('mine'),
     composerForm: document.getElementById('composer-form'),
     composerInput: document.getElementById('composer-input'),
+    history: document.getElementById('btn-history'),
   };
 
   function why(message) {
@@ -160,6 +161,7 @@
         say(text);
       });
     }
+    if (el.history) el.history.addEventListener('click', toggleHistory);
     fetch('/pack/chat.json', { cache: 'no-store' })
       .then(function (response) { return response.json(); })
       .then(function (info) {
@@ -181,13 +183,31 @@
     else sendChat(text);
   }
 
-  /** 我发过的话:只留最近几条,一行一条,超出就省略号——不出现滚动条。 */
+  /** 我发过的话:平时只留最近一句,按「历史」展开;一条一行,不出现滚动条。 */
   function addMine(text) {
     if (!el.mine) return;
     var line = document.createElement('div');
     line.textContent = text;
     el.mine.appendChild(line);
     while (el.mine.children.length > MINE_LINES) el.mine.removeChild(el.mine.children[0]);
+    if (el.history) {
+      el.history.textContent = el.mine.children.length > 1
+        ? (el.composer && el.composer.className.indexOf('expanded') >= 0 ? '收起' : '历史 ' + el.mine.children.length)
+        : '历史';
+      el.history.disabled = el.mine.children.length <= 1;
+    }
+  }
+
+  /** 展开/收起我发过的话:收起时只看得到最近一句。 */
+  function toggleHistory() {
+    if (!el.composer || !el.history) return;
+    var expanded = el.composer.className.indexOf('expanded') >= 0;
+    el.composer.className = expanded
+      ? el.composer.className.replace(' expanded', '')
+      : el.composer.className + ' expanded';
+    el.history.textContent = el.composer.className.indexOf('expanded') >= 0
+      ? '收起'
+      : (el.mine && el.mine.children.length > 0 ? '历史 ' + el.mine.children.length : '历史');
   }
 
   /** 字幕换一整段(终端通道给的是整句)。 */
@@ -542,7 +562,11 @@
     Object.keys(current).forEach(function (channel) {
       var param = channelParam[channel];
       if (!param) return;
-      var value = channel === 'MouthOpen' ? mouthOpen : current[channel];
+      // 口型:说话时是自己的振荡,不说话时听 World 的(片段能让她「张嘴」);两者取大的那个,
+      // 所以说话当中被要求张嘴也看得出来。
+      var value = channel === 'MouthOpen'
+        ? Math.max(mouthOpen, typeof current[channel] === 'number' ? current[channel] : 0)
+        : current[channel];
       var range = channelRange[channel];
       if (range) value = Math.min(range[1], Math.max(range[0], value));
       try {
