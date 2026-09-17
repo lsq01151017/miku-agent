@@ -39,7 +39,7 @@ a tool call's arguments.
 
 Conventions that hold across the repository:
 
-- **One prefix per World**, the id in PascalCase (`Minecraft`, `Pvz`, `QQ`, `WebSearch`), on its
+- **One prefix per World**, the id in PascalCase (`Terminal`, `Pvz`), on its
   contract exports: `<PREFIX>` definition, `<Prefix>ConfigSection`, `<PREFIX>_DEFAULTS`,
   `<PREFIX>_CONFIG_GROUP`, `<PREFIX>_TOOL_DECLS`, `<PREFIX>_PANEL_DECLS`, the `<Prefix>World`
   class and its `<Prefix>WorldProxy`. Internal helpers carry no prefix; engine-ipc types
@@ -48,7 +48,7 @@ Conventions that hold across the repository:
   defaults, config groups, secret names), `world.ts` (the class); a World that runs in a child
   process adds `proxy.ts`, `engine-child.ts`, `engine-ipc.ts`. The child process is 引擎子进程 in
   prose and `engine` in identifiers. File names are kebab-case.
-- **Tools** are `<id>_<verb phrase>` in snake_case (`mc_` is the fixed short form for minecraft).
+- **Tools** are `<id>_<verb phrase>` in snake_case.
   **Events** use `type` as `<id>.<noun>` with no hyphen inside a segment, `source` is the World id,
   `senderKey` is `<id>` or `<id>.<lane>`, `ts` comes from `nowIso(timezone)`.
 - **Config keys**: a duration carries its stored unit (`Ms`, `Sec`, `Minutes`); a directory ends in
@@ -150,8 +150,8 @@ that cannot be inferred from the code.
 - `pnpm build:web` after changing `src/web/client/`, `src/web/shared/` or any
   `console/client.ts`. Never while a bot process is alive on this machine: the running console
   serves the bundle being overwritten.
-- Never start a real bot to verify a change. Use tests, `pnpm dev:console` (fake data) or a
-  script under `scratch/`.
+- Never start a real bot to verify a change. Use tests, `pnpm typecheck`, or a script under
+  `scratch/`.
 - `pnpm logq` queries run logs; `pnpm check:extension <dir>` validates an extension package;
   `pnpm audit:release` runs the release audit.
 

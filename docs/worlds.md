@@ -49,7 +49,7 @@ World 应通过事件报告服务器起停、存档切换、连接变化等状�
 工具回执 `ToolOutcome { text, blobs?, failed? }`;handler 抛错由 Core 转成失败回执。
 `endsTurn` 让一个工具结束本轮,`barrierAfter` 让流式提前派发在它之后停下。
 工具名在一个 bot 内全局唯一:模型按名字调用,Core 按名字归属与隐藏。用自家短名做前缀
-(`mc_`、`qq_`);工具名与已挂载 World、Persona 工具或 Core 保留帧名冲突时,装配层拒绝挂载并报告原因。
+(`terminal_`);工具名与已挂载 World、Persona 工具或 Core 保留帧名冲突时,装配层拒绝挂载并报告原因。
 
 ## 定义与装配
 
@@ -81,7 +81,8 @@ Persona 的段模板用 `{{world.id}}` 与 `{{world.envPrompt}}` 嵌入,前缀�
 
 ## Persona–World 状态对账(PWSR)
 
-此设计仍在试验中。实现位于 `src/worlds/minecraft/world.ts`,由 World 自行管理,Core 不提供专用接口。
+此设计仍在试验中。它是 World 自己的事:实现由 World 管理,Core 不提供专用接口。
+仓内现在没有实现——原来那份随 `minecraft` World 一起删掉了,写新 World 时可以照下面的原则自己立一张表。
 
 设计原则是将路标、目标的持久语义记录交给 Persona 管理的 Memory,World 保存用于机械计算的运行时副本。
 bot 从 Memory 读取记录,再调用 World 工具登记;World 不直接读取 Memory。
@@ -111,23 +112,19 @@ Persona 自行决定恢复时机与内容。表为空时回执缺少相应信息
 计算结果须区分 bot 的标记与环境事实。「路径进入了你标记的危险区」可以,
 「系统判断这里危险」不可以。
 
-Minecraft 的 `PwsrTables` 管理目标、路标及蓝图的 realm 视图,空间记录按维度隔离。
-蓝图数据由 `BlueprintBook` 管理:设计可跨 realm 使用,施工绑定按 realm 和维度保存。
-配置 `dataDir` 时,设计与绑定写入 `minecraft-blueprints.json`,在下次创建实例时加载。
+一张表按 realm 保存目标与路标,空间记录按维度隔离;够大的一类记录(如成套设计)另有文件持久化,
+写进配置的 `dataDir` 下,下次创建实例时加载。
 
 ## 内建 World
 
 | id | 是什么 |
 |---|---|
-| `terminal` | 控制台里的对话通道,与 QQ 同层级的外部平台 |
-| `qq` | OneBot 协议端,只监听名单里的群与私聊;起草-确认门 |
-| `bilibili` | B 站直播间只读接入与本机 Overlay |
-| `minecraft` | mineflayer 客户端,观察 = 结构化文本、动作 = 异步执行器;子进程 |
-| `websearch` | 只有请求 / 响应工具,不产事件 |
+| `terminal` | 控制台里的对话通道 |
 | `console-fixture` | 开发控制台与验收测试使用的 World |
 
-`vtuber`、`asr`、`pvz`、`canvas` 是扩展包(见 [extensions.md](extensions.md))。`bilibili` 与
-`minecraft` 各有自己的 README;`src/worlds/websearch/` 最短,`src/worlds/minecraft/` 最全。
+仓内只留这两个。QQ、B 站直播、Minecraft、联网搜索四个 World 已从这一版删掉——渠道是扩展点,
+要哪个就写一个 `cortico-world-*` 包(见 [extensions.md](extensions.md) 与
+`templates/extension/world/`),`src/` 不必改。
 
 ## 添加 World
 

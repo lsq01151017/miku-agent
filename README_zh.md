@@ -108,10 +108,10 @@ Cortico 采用严格解耦的四层架构设计：
 | World | ID | 接入环境与能力 |
 |---|---|---|
 | 终端对话 | `terminal` | 控制台内建交互终端，支持双向文字会话 |
-| QQ | `qq` | 接入 QQ 群聊与私聊，支持可选的多模态视觉模型图像理解 |
-| 哔哩哔哩直播 | `bilibili` | 实时监听弹幕、礼物、醒目留言（SC）、大航海、进场通知与人流指标，附带本机 OBS 画面 Overlay |
-| Minecraft | `minecraft` | 基于 Mineflayer 接入 Minecraft 原版服务器，实现文字环境观察与高层动作执行 |
-| 网页搜索 | `websearch` | 集成 Brave Search API 的实时网络信息检索能力 |
+
+其余渠道不在这一版里。渠道是**扩展点**而不是内核功能:写一个 `cortico-world-*` 包，启动器会把它
+并进 World 表(见 [templates/extension/world](templates/extension/world/))。控制台渲染的是"此刻挂了
+什么"，所以前端一行都不用改。
 
 ## 模型端点
 

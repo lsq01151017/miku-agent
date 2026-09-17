@@ -55,5 +55,5 @@ provider 组例外:端点值写 `providers/<端点名>/config.json`,`activeProvi
 
 ## 包与部署的配置分工
 
-bot 包配置人格身份与演出选项,如 `minecraft.username`、`vtuber.delayedSources`。
+bot 包配置人格身份与演出选项,如扩展 World 的 `vtuber.delayedSources`。
 部署配置凭证、程序路径、设备与启用状态。同一键同时存在时使用部署值。

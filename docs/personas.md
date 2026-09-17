@@ -73,9 +73,9 @@ Persona 工具,Core 只认 `ToolDef.endsTurn`。
 
 | 包 | Persona | 一句话 | 端口 | Memory |
 |---|---|---|---|---|
-| `corti-soulmate` | `CortiSoulmate` | 分层记忆、交接后并行梦、QQ 起草-确认门、宪法归梦修订 | 7777 | `memory/` |
+| `corti-soulmate` | `CortiSoulmate` | 分层记忆、交接后并行梦、宪法归梦修订;渠道只有终端 | 7777 | `memory/` |
 | `cormini` | `Cormini` | 最小完整实现:工作区即记忆、宪法即前缀、一个 session、只有终端 | 7788 | `workspace/` |
-| `cortiv` | `CortiV` | AI VTuber 实时系统:演出舞台、B 站直播间、游戏 | 7789 | `workspace/` |
+| `cortiv` | `CortiV` | AI VTuber 实时系统:演出舞台与后台构思;形象、语音等渠道由扩展包提供 | 7789 | `workspace/` |
 
 ## 添加 Bot
 

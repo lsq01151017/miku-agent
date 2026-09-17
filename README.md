@@ -108,10 +108,11 @@ Cortico strictly separates concerns across four distinct layers:
 | World | ID | Integration & Capabilities |
 |---|---|---|
 | Terminal | `terminal` | Interactive two-way conversation within the web console |
-| QQ | `qq` | Multi-group and direct message channels with optional vision model transcription |
-| Bilibili Live | `bilibili` | Real-time danmaku, superchats, gifts, guards, and viewer traffic monitoring with local OBS overlay |
-| Minecraft | `minecraft` | Mineflayer client for vanilla servers: game state observations and high-level autonomous action dispatch |
-| Web Search | `websearch` | Real-time web search integration powered by Brave Search API |
+
+Other channels are not shipped in this build. A channel is an extension point, not a Core feature:
+write a `cortico-world-*` package and the launcher merges it into the world table (see
+[templates/extension/world](templates/extension/world/)). The console renders whatever is mounted,
+so no frontend change is needed.
 
 ## Model Providers
 

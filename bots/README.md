@@ -45,9 +45,9 @@ Windows 也可通过 `start.bat` 选择部署。
 
 | 代码包 id | Persona 类 | 显示名 | 能力 | 默认控制台端口 |
 |---|---|---|---|---|
-| `corti-soulmate` | `CortiSoulmate` | 雪午Yukima | 分层 Memory、潜意识三路、QQ 起草与确认、提案和宪法。 | 7777 |
+| `corti-soulmate` | `CortiSoulmate` | 雪午Yukima | 分层 Memory、潜意识三路、提案和宪法;渠道只有终端。 | 7777 |
 | `cormini` | `Cormini` | 可缇mini | 工作区 Memory、宪法前缀、主 session 和终端。 | 7788 |
-| `cortiv` | `CortiV` | 可缇Corti | 继承 Cormini，增加观众档案、交接后台整理，以及直播相关 World。 | 7789 |
+| `cortiv` | `CortiV` | 可缇Corti | 继承 Cormini，增加观众档案与交接后台整理;形象、语音等渠道由扩展包提供。 | 7789 |
 
 ## 新建 bot
 

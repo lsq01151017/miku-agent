@@ -31,12 +31,10 @@ Windows 把控制台事件发给前台进程组里的每一个进程。`bin/cort
 | `src/launcher.ts` | 开浏览器用 `cmd /c start`;多监听一个 SIGBREAK(Ctrl+Break) |
 | `src/extensions.ts` | 经 shell 调用 corepack 的 `.cmd` 启动文件,参数逐个加引号 |
 | `src/web/path-picker.ts` | 本机路径选择器用 PowerShell 起 WinForms 对话框;没有 PowerShell 时报不可用 |
-| `src/worlds/minecraft/` | 硬信号集 SIGHUP / SIGBREAK,收到即 `save-all` + `stop`;窗口探测与改标题走 `client-window.ps1`;便携 JDK 找 `bin/java.exe` |
 
 ## 运行限制
 
 - 外部程序可能受到 Smart App Control 限制;诊断与运行时目录设置见 [runtimes.md](runtimes.md)。
-- Minecraft 的 Java 版本约定与客户端兼容限制见 [Minecraft README](../src/worlds/minecraft/README.md)。
 - 在 `extensions/` 下跑 pnpm 必须带 `--ignore-workspace`,否则根 lockfile 会多出一个 importer。
 
 ## 文本文件编码

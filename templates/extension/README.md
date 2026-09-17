@@ -46,4 +46,5 @@ pnpm check:extension <包目录>
 
 写法的规矩在 [docs/worlds.md](../../docs/worlds.md)、[docs/providers.md](../../docs/providers.md)、
 [docs/personas.md](../../docs/personas.md);打包与校验在 [docs/extensions.md](../../docs/extensions.md)。
-控制台面板模板里没有:要加面板看 `src/worlds/qq/console/client.ts` 与 [docs/console.md](../../docs/console.md)。
+控制台面板模板里没有:要加面板看 [docs/console.md](../../docs/console.md),里面有面板声明与
+`console/client.ts` 的接线方式。

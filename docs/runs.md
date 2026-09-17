@@ -23,7 +23,7 @@
 ## 日志格式
 
 `log.jsonl` 一行一个 `LogRecord`:`ts`(部署时区的 ISO,毫秒)、`run`、`seq`、`level`、
-`area`(`core.loop`、`worlds.minecraft`、`console`…)、`event?`、`msg`、`durMs?`、
+`area`(`core.loop`、`worlds.terminal`、`console`…)、`event?`、`msg`、`durMs?`、
 `repeat?`（折叠汇总）、`data?`、`err?`。关联字段 `sess` / `round` / `resp` / `call` / `ev` /
 `task` 分别标识 session、轮次、模型调用、工具调用、事件和任务；这些字段由 AsyncLocalStorage
 在轮次与工具调用边界设置，写入日志时读取。子进程通过 IPC 发送使用自身时钟的 `LogNote`，

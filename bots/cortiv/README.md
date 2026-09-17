@@ -17,13 +17,13 @@ pnpm start cortiv
 | World | 功能与配置 |
 |---|---|
 | `terminal` | 控制台聊天。 |
-| `minecraft` | Minecraft 操作、任务队列和客户端托管。 |
 | `pvz` | 植物大战僵尸操作、任务队列和游戏托管，由扩展 `cortico-world-pvz` 提供，默认关闭。 |
 | `vtuber` | L1–L4 演出、TTS 声卡输出、演出流 SSE `http://127.0.0.1:7792/stream` 与弹幕输入 WS，由扩展 `cortico-world-vtuber` 提供。 |
-| `bilibili` | 直播间只读接入：弹幕、礼物、SC、上舰和观众统计。默认关闭，启用前填写 `worlds.bilibili.roomId`；`sessdata` 可提供登录凭证。 |
 | `asr` | 麦克风语音识别，由扩展 `cortico-world-asr` 提供，默认关闭。 |
+| `canvas` | 画布演出，由扩展 `cortico-world-canvas` 提供，默认关闭。 |
 
 未安装的扩展 World 显示为不可用。VTS 首次连接授权后可将 `VTS_AUTH_TOKEN` 写入部署 `.env`。
+直播与 Minecraft 两个渠道已从这一版删掉;要哪个就写一个 `cortico-world-*` 包。
 
 ## 事件投递
 

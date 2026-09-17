@@ -14,7 +14,8 @@ pnpm start corti-soulmate
 
 ## World
 
-默认启用 `qq`、`terminal`、`websearch`。
+默认启用 `terminal`;交付的渠道只有它。要接别的平台就写一个 World 扩展包,Persona 这边在
+`declares` 里加上那个 id。
 
 ## 控制台
 

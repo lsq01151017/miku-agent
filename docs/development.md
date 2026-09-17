@@ -14,14 +14,14 @@ Node 22+,pnpm 11(版本由 `package.json` 的 `packageManager` 指定)。规则�
 | `pnpm run typecheck` | Node 侧 `tsc --noEmit` |
 | `pnpm typecheck:web` | 浏览器侧,`tsconfig.web.json` |
 | `pnpm build:web` | 控制台产物:esbuild 分包 + Tailwind,写 `dist/web/` |
-| `pnpm dev:console` | 假数据起控制台,`http://127.0.0.1:8848/`;不连真实 API,不起 Core |
 | `pnpm logq` | 查运行日志(见 [runs.md](runs.md)) |
 | `pnpm check:extension <目录>` | 校验一个扩展包 |
 | `pnpm audit:release` | 发布审计:部署资源、明文凭证、异常大文件 |
 
 提交前必须通过 `pnpm test` 与 `pnpm run typecheck`;修改浏览器代码还需通过
 `pnpm typecheck:web` 与 `pnpm build:web`。bot 运行期间禁止构建其正在使用的控制台文件。
-使用测试、`dev:console` 或 `scratch/` 下的脚本验证改动,禁止为验证而启动真实 bot。
+使用测试、`pnpm typecheck` 或 `scratch/` 下的脚本验证改动,禁止为验证而启动真实 bot。
+假数据控制台随四个内建 World 一起删掉了;要看控制台就起一个部署,或看控制台的测试。
 
 ## 两份 tsconfig
 
@@ -43,11 +43,11 @@ Node 侧与浏览器侧分别配置类型库:`tsconfig.json` 排掉 `src/web/cli
 | `tests/web/` | 控制台:协议、内核、各框架页、面板 bundle、零 diff 验收 |
 | `tests/worlds/<id>/` | 各 World |
 | `tests/corti-soulmate/`、`tests/cormini/`、`tests/cortiv/` | 三个 Persona |
-| `tests/integration/` | 整机:启动即暂停、QQ 起草确认、彩排 |
-| `tests/helpers/` | `fake-host.ts`(World 的假宿主)、`mock-napcat.ts`(假 OneBot 协议端) |
+| `tests/integration/` | 整机:启动即暂停、系统装配 |
+| `tests/helpers/` | `fake-host.ts`(World 的假宿主) |
 
-测试使用脚本化模型、本地 git 仓库、端口与事件库;World 宿主和平台服务使用 `FakeHost`、
-`MockNapCat` 等替身,部分 HTTP 响应由测试提供。测试不访问外部网络。
+测试使用脚本化模型、本地 git 仓库、端口与事件库;World 宿主与平台服务使用 `FakeHost` 等替身,
+部分 HTTP 响应由测试提供。测试不访问外部网络。
 
 ## 目录
 
