@@ -32,6 +32,28 @@ Owner: `src/index.ts`
 包说 `FaceAngleZ`,模型接的是 `ParamAngleZ`;`params.json` 的 `suggests` 是建议映射,
 `range` 是裁剪边界,`losesIfMissing` 说明缺了这条通道会丢掉什么表演。换模型只换映射。
 
+分辨率有优先级:**部署覆盖(`paramMap`) > 包的建议 > 模型自带的映射 > 不接**。模型自带的那份来自
+它附带的 VTube Studio 配置(`ParameterSettings[].OutputLive2D`,作者写的),**只在建议落空时**才用
+——那份配置是给人用的界面文件,会留笔误。
+
+## 值也有约定差,不只是名字
+
+`paramOffset` 补的是**值的约定**。实测这份模型:
+
+| 通道 | 包说 | 模型参数说 | 照包写会怎样 |
+|---|---|---|---|
+| `EyeOpenLeft`/`EyeOpenRight` | `[-1,1]`,**0=平常睁眼** | `ParamEyeLOpen` 是 `[0,1]`,**1=睁眼** | 写 0 → **眼睛全闭** |
+
+所以这两条通道要 `paramOffset: "EyeOpenLeft=1,EyeOpenRight=1"`。偏移加在合成之后、裁剪之前,
+情绪把它压低时仍然是"眯一点"而不是"闭死"。同类错位在别的模型上还会出现,判据是:包的区间伸到
+模型参数区间之外、而包把 0 当中性。
+
+## 不归通道管的参数:定值
+
+`paramOverrides` 每帧写一次,用在不由通道驱动的参数上。实测:模型的水印是 `Param137`,作者的
+使用说明写着「水印按键默认打开,需在设置表情中关闭」——`paramOverrides: "Param137=0"` 就是照作者
+给的方式关掉它,**不动模型文件**(说明书同时写着不可二传二改)。
+
 ## 数据有缺口,读取要报出来
 
 真实包里 `vocab.json` 提到的 `fx_*` 特效片段并不存在于 `clips.json`。`loadPack` 把这些名字

@@ -32,6 +32,8 @@
   var speaking = false;
   var speakStart = 0;
   var lastExpression = null;
+  // 不归通道管的参数定值(例如模型的水印开关),每帧照写一次,免得被表情或动作改回去。
+  var overrides = {};
 
   function fit() {
     if (!app) return;
@@ -51,6 +53,8 @@
         if (spec.param) channelParam[channel] = spec.param;
         if (spec.range) channelRange[channel] = spec.range;
       });
+      var fixed = await (await fetch('/pack/overrides.json', { cache: 'no-store' })).json();
+      overrides = fixed || {};
     } catch (e) {
       why('取 /pack/channels.json 失败:' + e.message);
       return;
@@ -98,6 +102,10 @@
       var range = channelRange[channel];
       if (range) value = Math.min(range[1], Math.max(range[0], value));
       try { core.setParameterValueById(param, value); } catch (e) { /* 模型没有这条参数 */ }
+    });
+    // 不归通道管的参数(例如水印开关):每帧照写一次,免得被表情或动作改回去。
+    Object.keys(overrides).forEach(function (param) {
+      try { core.setParameterValueById(param, overrides[param]); } catch (e) { /* 同上 */ }
     });
   }
 

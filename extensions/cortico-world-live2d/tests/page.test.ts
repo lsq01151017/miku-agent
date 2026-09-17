@@ -50,12 +50,14 @@ function stubBrowser(): {
     Application: class { renderer = { resize: () => {} }; stage = { addChild: () => {} }; },
     live2d: { Live2DModel: { from: async () => model } },
   };
-  globals.fetch = async () => ({
-    json: async () => ({
-      FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
-      MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
-      EyeLeftX: { param: null, range: null },
-    }),
+  globals.fetch = async (url: string) => ({
+    json: async () => (String(url).includes('overrides')
+      ? { Param137: 0 }
+      : {
+        FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
+        MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
+        EyeLeftX: { param: null, range: null },
+      }),
   });
   class FakeEventSource {
     onopen: (() => void) | null = null;
@@ -108,5 +110,7 @@ describe('播放器页面', () => {
     expect(last('ParamMouthForm')).toBeGreaterThan(0);
     // 通道表里映射是 null 的(EyeLeftX:包说与右眼共用),不该写。
     expect(stubs.written.some((entry) => entry.param === 'ParamEyeBallX')).toBe(false);
+    // 不归通道管的参数定值每帧照写(模型的水印开关 Param137)。
+    expect(last('Param137')).toBe(0);
   });
 });

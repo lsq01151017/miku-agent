@@ -26,6 +26,21 @@ export interface Live2DConfigSection extends WorldSection {
    * 配置 schema 的数组只支持数字,所以这里用一条字符串。
    */
   paramMap: string;
+  /**
+   * 通道值的偏移,写成 `通道=数字`,逗号分隔。合成之后、裁剪之前加。
+   *
+   * 用在**包的约定与模型参数的约定不一致**的通道上。实测:包里 `EyeOpenLeft` 的单位写着
+   * 「[-1,1],**0=平常睁眼**」,而模型的 `ParamEyeLOpen` 是「[0,1],**1=睁眼**」——
+   * 直接把 0 写进去就是**眼睛全闭**。给这两条通道加 1,中性才落在"睁着"上。
+   */
+  paramOffset: string;
+  /**
+   * 直接钉住某几个模型参数的定值,写成 `参数名=数值`,逗号分隔,渲染端每帧写一次。
+   *
+   * 用在**不归通道管**的参数上。实测:模型的水印是 `Param137`,作者注明「默认打开,
+   * 需在设置表情中关闭」——钉成 0 就是照作者给的方式关掉它,不动模型文件。
+   */
+  paramOverrides: string;
   /** state 片段保持多久后开始淡出。 */
   stateHoldMs: number;
   /** 淡出时长。 */
@@ -40,6 +55,8 @@ export const LIVE2D_DEFAULTS: Live2DConfigSection = {
   modelDir: '',
   modelFile: '',
   paramMap: '',
+  paramOffset: '',
+  paramOverrides: '',
   stateHoldMs: 25_000,
   stateFadeMs: 8_000,
 };
@@ -84,6 +101,19 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         type: 'string',
         title: '模型入口文件',
         description: '留空 = 用模型目录里唯一的那个 .model3.json;多于一个时必须点名。',
+      },
+      'paramOffset': {
+        type: 'string',
+        title: '通道值偏移',
+        description: '写成「通道=数字」，多项用逗号分隔，例如 EyeOpenLeft=1。'
+          + '用在包的约定与模型参数的约定不一致的通道上：包说「0=平常睁眼」，而模型的参数是「1=睁眼」，'
+          + '不加偏移就写成了全闭。',
+      },
+      'paramOverrides': {
+        type: 'string',
+        title: '参数定值',
+        description: '写成「参数名=数值」，多项用逗号分隔，渲染端每帧写一次，例如 Param137=0 关掉水印。'
+          + '用在不由通道驱动的参数上。',
       },
       'stateHoldMs': {
         type: 'integer',

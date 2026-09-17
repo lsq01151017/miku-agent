@@ -22,6 +22,7 @@ import type { WorldContext } from 'cortico/world.ts';
 import { baselineChannels, EMOTION_BASELINE, type EmotionValues } from './baseline.ts';
 import {
   parseModelChannelMap,
+  parseNumberMap,
   parseParamMap,
   repairFromModel,
   resolveChannels,
@@ -89,6 +90,9 @@ export class Live2DWorld implements World {
   private modelFile = '';
   /** 通道 → 本模型参数;起服务时解析定下,页面直接用。 */
   private channels: ResolvedChannels = {};
+  /** 通道值的偏移与不归通道管的参数定值;起服务时解析。 */
+  private paramOffset: Record<string, number> = {};
+  private paramOverrides: Record<string, number> = {};
 
   constructor(opts: Live2DWorldOptions) {
     this.cfg = opts.cfg;
@@ -219,6 +223,8 @@ export class Live2DWorld implements World {
 
     // 分辨率顺序:部署覆盖 > 包的建议 > 模型自带的映射(只在建议落空时用) > 不接。
     const modelParams = this.modelParamIds();
+    this.paramOffset = parseNumberMap(this.cfg.paramOffset);
+    this.paramOverrides = parseNumberMap(this.cfg.paramOverrides);
     this.channels = resolveChannels(this.pack, parseParamMap(this.cfg.paramMap));
     if (modelParams !== null) {
       const repaired = repairFromModel(this.channels, modelParams, this.modelChannelMap());
@@ -303,6 +309,9 @@ export class Live2DWorld implements World {
       if (url.pathname === '/pack/channels.json') {
         return this.sendJson(res, this.channels);
       }
+      if (url.pathname === '/pack/overrides.json') {
+        return this.sendJson(res, this.paramOverrides);
+      }
       if (url.pathname === '/pack/expressions.json') {
         return this.sendJson(res, {
           available: [...this.modelExpressions].sort(),
@@ -371,7 +380,13 @@ export class Live2DWorld implements World {
   // ── 推流 ────────────────────────────────────────────────────────────────────
 
   private frame(): string {
-    const channels = this.performance?.channelsAt(Date.now()) ?? {};
+    const raw = this.performance?.channelsAt(Date.now()) ?? {};
+    // 包的约定与模型参数的约定不一致时,在合成之后、裁剪之前补上偏移(例:眼睛的"0=平常睁眼"
+    // 对不上参数的"1=睁眼")。
+    const channels: Record<string, number> = { ...raw };
+    for (const [channel, offset] of Object.entries(this.paramOffset)) {
+      channels[channel] = (channels[channel] ?? 0) + offset;
+    }
     return JSON.stringify({
       channels,
       // 表情与通道写的是不相交的参数组,渲染端两样都照做。

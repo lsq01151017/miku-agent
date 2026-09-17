@@ -81,6 +81,21 @@ export function verifyAgainstModel(
     .map(([channel, value]) => ({ channel, param: value.param!, losesIfMissing: value.losesIfMissing }));
 }
 
+/** `名字=数字` 的配置串 → 数值表;逗号、换行或分号分隔,解析不出的项丢掉。 */
+export function parseNumberMap(text: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const raw of String(text ?? '').split(/[,\n;]/)) {
+    const entry = raw.trim();
+    if (!entry) continue;
+    const at = entry.lastIndexOf('=');
+    if (at <= 0) continue;
+    const value = Number(entry.slice(at + 1).trim());
+    if (!Number.isFinite(value)) continue;
+    out[entry.slice(0, at).trim()] = value;
+  }
+  return out;
+}
+
 export interface ChannelRepair {
   channel: string;
   from: string;

@@ -288,3 +288,40 @@ describe('生命周期', () => {
     await expect(start({ packDir: join(root, '没有这个目录') })).rejects.toThrow(/素材包目录不存在/);
   });
 });
+
+describe('通道偏移与参数定值', () => {
+  it('偏移加在合成之后:中性基线 0 加上 1 才是模型的"睁眼"', async () => {
+    const live = await start({ paramOffset: 'EyeOpenLeft=1, EyeOpenRight=1' });
+    const controller = new AbortController();
+    const frame = await firstFrame(controller.signal) as { channels: Record<string, number> };
+    controller.abort();
+    // 包的约定是"0=平常睁眼",模型的参数是"1=睁眼":不加偏移就会写成全闭。
+    expect(frame.channels.EyeOpenLeft).toBe(1);
+    expect(frame.channels.EyeOpenRight).toBe(1);
+  });
+
+  it('偏移会跟着情绪走,不是钉死的常数', async () => {
+    const live = await start({ paramOffset: 'EyeOpenLeft=1' });
+    // 寂寞 -> 基线把眼睛压低 0.12,加偏移后是 0.88。
+    live.setInternalState({ valence: 0.35, arousal: 0.55, bond: 0.1, loneliness: 0.8, shyness: 0.1, empathy: 0 });
+    const controller = new AbortController();
+    const frame = await firstFrame(controller.signal) as { channels: Record<string, number> };
+    controller.abort();
+    expect(frame.channels.EyeOpenLeft).toBeLessThan(1);
+    expect(frame.channels.EyeOpenLeft).toBeGreaterThan(0.5);
+  });
+
+  it('参数定值按参数名给渲染端,每帧照写', async () => {
+    await start({ paramOverrides: 'Param137=0' });
+    expect(await (await fetch(url('/pack/overrides.json'))).json()).toEqual({ Param137: 0 });
+  });
+
+  it('配置串写得不成样子时不猜:解析不出的项丢掉', async () => {
+    await start({ paramOffset: 'EyeOpenLeft=abc, =1, EyeOpenRight=1' });
+    const controller = new AbortController();
+    const frame = await firstFrame(controller.signal) as { channels: Record<string, number> };
+    controller.abort();
+    expect(frame.channels.EyeOpenLeft).toBe(0);
+    expect(frame.channels.EyeOpenRight).toBe(1);
+  });
+});
