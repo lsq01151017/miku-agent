@@ -347,9 +347,13 @@ describe('播放器页面', () => {
     expect(node('subtitle').className).toContain('on');
     expect(node('mine').children).toHaveLength(2);               // 她的回复不落在输入区里
 
+    // 多行字幕原样换行,但行尾空白与空行不留:它们会顶出看不见的行距。
+    stubs.sockets[0]!.fire(JSON.stringify({ type: 'msg', from: '初音未来', text: '上半句  \n\n\n下半句\n' }));
+    expect(node('subtitle').textContent).toBe('上半句\n下半句');
+
     // 我自己的回显(终端广播回来)不进字幕,也不再记一行。
     stubs.sockets[0]!.fire(JSON.stringify({ type: 'msg', from: '制作人', text: '第一句' }));
-    expect(node('subtitle').textContent).toBe('在的哦');
+    expect(node('subtitle').textContent).toBe('上半句\n下半句');
 
     // 底部收起时只看得到最近一句;按「历史」展开,再按收起。
     expect(node('mine').children.map((child) => child.textContent)).toEqual(['第一句', '第二句']);

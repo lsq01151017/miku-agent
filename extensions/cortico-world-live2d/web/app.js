@@ -245,8 +245,10 @@
 
   function renderSubtitle(holdMs) {
     if (!el.subtitle) return;
-    el.subtitle.textContent = subtitleText;
-    el.subtitle.className = subtitleText === '' ? 'glass' : 'glass on';
+    // 换行照显,但行尾空白与空行去掉:流式吐字时它们会多顶出一行,看着就是凭空多出来的行距。
+    var shown = subtitleText.replace(/[ \t]+$/gm, '').replace(/\n{2,}/g, '\n').replace(/\n+$/, '');
+    el.subtitle.textContent = shown;
+    el.subtitle.className = shown === '' ? 'glass' : 'glass on';
     if (subtitleTimer !== null) clearTimeout(subtitleTimer);
     subtitleTimer = setTimeout(function () {
       subtitleTimer = null;
