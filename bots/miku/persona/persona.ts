@@ -11,12 +11,14 @@ import type {
   CoreApi,
   ContextHandoffResult,
   EventEnvelope,
+  OutputTap,
   PrefixSegment,
   SessionDecl,
   SystemPrefixContext,
   ToolDef,
 } from 'cortico/core/types.ts';
 import type { ContextRecord } from 'cortico/protocol/open-responses/context.ts';
+import type { StreamEvent } from 'cortico/protocol/open-responses/index.ts';
 import { renderTemplate } from 'cortico/core/template.ts';
 import { hasRole } from 'cortico/protocol/open-responses/context-helpers.ts';
 import { Cormini, MAIN, type CorminiOptions, type ContextStagePolicy } from '../../cormini/persona/persona.ts';
@@ -41,6 +43,57 @@ import { asPersonaRole, checkAccess } from './permissions.ts';
 import { renderToolProtocol } from './toolProtocol.ts';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
+
+/**
+ * 从还没拼完的工具参数 JSON 里取出某个字符串字段的当前值;还没到那个字段就给 null。
+ *
+ * 参数是流式拼出来的,所以任何一刻都可能只到一半:结尾的 `\` 与 `\uXXXX` 要等到齐了才算,
+ * 早算一步就会把半个转义序列当成字吐出去。
+ */
+export function partialStringArgument(raw: string, field: string): string | null {
+  const key = raw.indexOf(`"${field}"`);
+  if (key < 0) return null;
+  let at = raw.indexOf(':', key + field.length + 2);
+  if (at < 0) return null;
+  at += 1;
+  while (at < raw.length && /\s/.test(raw[at]!)) at += 1;
+  if (raw[at] !== '"') return null;
+  at += 1;
+
+  let out = '';
+  while (at < raw.length) {
+    const ch = raw[at]!;
+    if (ch === '"') break;
+    if (ch !== '\\') {
+      out += ch;
+      at += 1;
+      continue;
+    }
+    const next = raw[at + 1];
+    if (next === undefined) break;
+    if (next === 'u') {
+      const hex = raw.slice(at + 2, at + 6);
+      if (!/^[0-9a-fA-F]{4}$/.test(hex)) break;
+      out += String.fromCharCode(Number.parseInt(hex, 16));
+      at += 6;
+      continue;
+    }
+    out += next === 'n' ? '\n' : next === 't' ? '\t' : next === 'r' ? '\r' : next;
+    at += 2;
+  }
+  return out;
+}
+
+/** 操作员在控制台里打的那条:发信人是本地的人,不是外部来信。 */
+export function isOperatorMessage(event: EventEnvelope): boolean {
+  return event.origin === 'internal' && event.type === 'terminal.message';
+}
+
+/** 控制台那条事件的正文:`text` 带着时间戳与名字,`meta.body` 才是他打的原话。 */
+function operatorBody(event: EventEnvelope): string | null {
+  const body = (event.meta as { body?: unknown } | undefined)?.body;
+  return typeof body === 'string' && body !== '' ? body : null;
+}
 
 /** 人格状态袋里的键。Core 只负责原子持久化,不解释内容。 */
 const EMOTION_STATE_KEY = 'emotion';
@@ -249,18 +302,25 @@ export class Miku extends Cormini {
 
   /**
    * 外部事件投递时更新状态。先按经过时间回落,再按这一批的措辞判断。
-   * 只看 `origin === 'external'`:那是别人说的话;内部通知不参与情绪判断。
+   *
+   * 算进来的是"对她说的、别人打的字":外部事件,加上操作员在控制台里打的那些。
+   * 控制台那条是 `origin: 'internal'`(发信人是本地操作员,不是外部来信),但对这个
+   * Persona 来说,操作员就是跟她说话的那个人——把这一路漏掉,她的状态在唯一一个
+   * 她真的在说话的地方就永远不动。定时唤醒、系统通知这类内部文本仍然不参与。
    */
   override onDelivery(ctx: { events: EventEnvelope[] }): void {
     super.onDelivery(ctx);
     const policy = this.emotionPolicy();
     if (!policy.enabled) return;
 
-    const spoken = ctx.events.filter((event) => event.origin === 'external' && event.text);
+    const spoken = ctx.events
+      .filter((event) => event.text && (event.origin === 'external' || isOperatorMessage(event)))
+      .map((event) => operatorBody(event) ?? event.text ?? '')
+      .filter((text) => text !== '');
     if (spoken.length === 0) return;
 
     const reasons = decayEmotion(this.state, Date.now(), policy.decayScale);
-    const { deltas, reasons: affectReasons } = analyzeAffect(spoken.map((event) => event.text).join('\n'));
+    const { deltas, reasons: affectReasons } = analyzeAffect(spoken.join('\n'));
     applyDeltas(this.state, deltas, reasons, policy.maxStepPerTurn);
     this.state.turns += 1;
     this.state.updatedAt = Date.now();
@@ -271,6 +331,108 @@ export class Miku extends Cormini {
     if (all.length > 0) {
       this.core?.log.debug(`[miku] 心情 ${this.state.mood}`, { reasons: all });
     }
+  }
+
+  /**
+   * 主 session 的输出旁路。基类把挂载 World 的接收器扇成一个 tap;这里再补一层翻译。
+   *
+   * 她的话不是正文,是**工具的调用参数**:说出声靠带 `speak` 标签的工具(终端那条就是),
+   * 正文因此一个字符都不会出现在 `response.output_text.delta` 里。接收她声音的那几个 World
+   * (形象层就在其中)只认正文增量,所以在这里把参数流按参数表翻成正文流——
+   * 哪个字段是话由工具自己声明的 `parameters` 说了算,不写死字段名。
+   *
+   * 放在 Persona 是因为只有这一层同时看得见"她有哪些说话的工具"和"输出旁路"。
+   * World 之间不必互相认识:换一个说话渠道(换个 World)形象层照样跟得上。
+   */
+  protected override outputTap(): OutputTap | undefined {
+    const base = super.outputTap();
+    if (!base) return undefined;
+    /** item_id → 说话工具的那个正文参数名,以及已经拼到一半的参数原文。 */
+    const speaking = new Map<string, { tool: string; field: string; raw?: string }>();
+    /** item_id → 已经吐出去的字数,用来只发增量。 */
+    const emitted = new Map<string, number>();
+
+    const forget = (itemId: string): void => {
+      speaking.delete(itemId);
+      emitted.delete(itemId);
+    };
+
+    const emit = (itemId: string, field: string, raw: string): void => {
+      const text = partialStringArgument(raw, field);
+      if (text === null) return;
+      const done = emitted.get(itemId) ?? 0;
+      if (text.length <= done) return;
+      emitted.set(itemId, text.length);
+      base.onEvent({ type: 'response.output_text.delta', delta: text.slice(done) } as StreamEvent);
+    };
+
+    return {
+      onEvent: (event) => {
+        base.onEvent(event);
+        if (event.type === 'response.output_item.added') {
+          const item = event.item as { type?: string; id?: string; name?: string; call_id?: string } | null;
+          if (item?.type !== 'function_call') return;
+          const field = this.speechFieldOf(item.name ?? '');
+          if (field === null) return;
+          const entry = { tool: item.name ?? '', field };
+          // 参数增量带来的 `item_id` 是条目 id,但不同方言两条 id 都可能出现,两个都记。
+          if (item.id) speaking.set(item.id, entry);
+          if (item.call_id) speaking.set(item.call_id, entry);
+          return;
+        }
+        if (event.type === 'response.function_call_arguments.delta') {
+          const entry = speaking.get(event.item_id);
+          if (!entry) return;
+          entry.raw = (entry.raw ?? '') + (event.delta ?? '');
+          emit(event.item_id, entry.field, entry.raw);
+          return;
+        }
+        if (event.type === 'response.function_call_arguments.done') {
+          const entry = speaking.get(event.item_id);
+          if (!entry) return;
+          entry.raw = event.arguments ?? entry.raw ?? '';
+          emit(event.item_id, entry.field, entry.raw);
+          forget(event.item_id);
+          return;
+        }
+        if (event.type === 'response.output_item.done') {
+          const item = event.item as { type?: string; call_id?: string; id?: string } | null;
+          if (item?.type !== 'function_call') return;
+          if (item.id) forget(item.id);
+          if (item.call_id) forget(item.call_id);
+        }
+      },
+      externalizes: (event) => {
+        // 她说的话也算外部输出:内容在参数里,基类那层看不见,这里替它问一次。
+        if (event.type === 'response.output_item.added') {
+          const item = event.item as { type?: string; name?: string } | null;
+          if (item?.type === 'function_call' && this.speechFieldOf(item.name ?? '') !== null) {
+            return base.externalizes?.({ type: 'response.output_text.delta', delta: ' ' } as StreamEvent) ?? false;
+          }
+        }
+        return base.externalizes?.(event) ?? false;
+      },
+      onRoundEnd: () => {
+        speaking.clear();
+        base.onRoundEnd?.();
+      },
+      onAbort: (reason) => {
+        speaking.clear();
+        base.onAbort?.(reason);
+      },
+    };
+  }
+
+  /** 说话工具里装话的那个参数名;不是说话工具、或它没有字符串参数时给 null。 */
+  private speechFieldOf(toolName: string): string | null {
+    if (toolName === '') return null;
+    for (const tool of this.ioTools('speak')) {
+      if (tool.name !== toolName) continue;
+      const properties = (tool.parameters as { properties?: Record<string, { type?: string }> }).properties ?? {};
+      const field = Object.keys(properties).find((name) => properties[name]?.type === 'string');
+      return field ?? null;
+    }
+    return null;
   }
 
   /** 心跳那一行:怕寂寞的性格在这里出声,其余沿用基类措辞。 */
