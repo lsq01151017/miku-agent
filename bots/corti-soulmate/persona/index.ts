@@ -109,7 +109,7 @@ export class CortiSoulmate extends Cormini {
       ...(opts.promptsDir ? { orientationOverrideFile: join(opts.promptsDir, 'ORIENTATION.md') } : {}),
       ...(opts.firstTurnDir ? { firstTurnDir: opts.firstTurnDir } : {}),
       tickDelayMs: (now) => tickDelayMs(cfg, now),
-      blobsDir: 'external/qq/images/',
+      blobsDir: 'external/images/',
     };
     super(base);
     this.cfg = cfg;

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Cormini 文件工具之外,这份人格实现自己的三样:memo 容量守门、`move_file`、
  * `schedule_wake` 的 schema,以及两条认知路径的 "Using your tools" 文案。
  */
@@ -155,7 +155,7 @@ export function toolUsageText(role: PersonaRole, caps: { residentCap: number; ac
         '* `note/` — the durable layer, not shown in full each prefix; you read it when you need it.',
         ' * `note/playbook/` — guides you consult before acting. The names of what is filed there surface in MEMORY 0, so you always know what you can look up; open one with `read_file`.',
         ' * `note/library/` — whatever you want to keep for later. Arrange it however suits you; you can make subdirectories under it.',
-        '* `external/` — your own tool drawer (stickers you keep with `save_blob` live in `external/qq/images/`); you may create, rename and delete there freely.',
+        '* `external/` — your own tool drawer (stickers you keep with `save_blob` live in `external/images/`); you may create, rename and delete there freely.',
         '* `MEMORY 0–4` is a snapshot from the moment you woke. Writes take effect in the files immediately, but the snapshot refreshes only after the next handoff. Trust tool results, not the snapshot.',
         '',
         '# `people/`',

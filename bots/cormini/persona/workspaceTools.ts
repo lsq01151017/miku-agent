@@ -291,7 +291,7 @@ function globTool(host: WorkspaceHost): ToolDef {
     name: 'glob_files',
     description: 'Find files in your workspace by name pattern, most recently modified first. '
       + 'Patterns not starting with **/ get it prepended, so *.md matches everywhere; '
-      + 'use a directory prefix to narrow (minecraft/worlds/*/目标.md, viewers/**/1234*.md).',
+      + 'use a directory prefix to narrow (note/*.md, viewers/**/1234*.md).',
     tags: ['read'],
     parameters: {
       type: 'object',

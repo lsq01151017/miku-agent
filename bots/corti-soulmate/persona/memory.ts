@@ -25,9 +25,9 @@ export const MEMORY_VAR_DECLS: readonly PromptVarDecl[] = [
   { name: 'memory.timezone', description: '时区名。' },
 ];
 
-/** external/qq/images/ 里最近的文件名,按mtime倒序取前n个(表情包库最近摘要用) */
+/** external/images/ 里最近的文件名,按mtime倒序取前n个(表情包库最近摘要用) */
 function recentImageNames(memoryDir: string, n = 5): string[] {
-  const dir = join(memoryDir, 'external', 'qq', 'images');
+  const dir = join(memoryDir, 'external', 'images');
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isFile() && !e.name.startsWith('.') && !e.name.includes('.tmp-'))

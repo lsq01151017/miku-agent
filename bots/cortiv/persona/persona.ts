@@ -66,10 +66,9 @@ const COGNITION_ROUNDS = { soft: 6, hard: 8 };
 /** 整体超时预算为 15 分钟；工具循环与请求超时使用同一截止时刻。 */
 const COGNITION_TIMEOUT_MS = 15 * 60_000;
 /**
- * 后台构思成品在她工作区里的落脚处。蓝图设计没有世界性(跨存档通用),
- * 所以留在 `minecraft/` 全局,不进 `worlds/<存档名>/`。与 MEMORY_NOTE 同一句约定。
+ * 后台构思成品在她工作区里的落脚处:一份一个文件。与 MEMORY_NOTE 同一句约定。
  */
-export const BLUEPRINT_DIR = 'minecraft/蓝图/';
+export const BLUEPRINT_DIR = '构思/';
 /** 交接快照渲染给梦的字符预算(头部优先;主会话的笔记优先保留近期记录) */
 const DREAM_TRANSCRIPT_MAX_CHARS = 120_000;
 /** 报 id 立档的互动门槛:低于这个数的按路过处理,不占一个文件 */
@@ -407,7 +406,7 @@ export class CortiV extends Cormini {
       modTools.length > 0
         ? `这次能用的 World 工具:${modTools.join(' / ')}(交稿就靠它们)。`
         : '这次 World 一把工具都没给:结论只能写在正文里交回去。',
-      `另外你自己的工作区文件工具照常在手,顺手把成品存进你的分区(蓝图一类存 ${BLUEPRINT_DIR}),`
+      `另外你自己的工作区文件工具照常在手,顺手把成品存进你的分区(存到 ${BLUEPRINT_DIR}),`
         + '键和一句描述记进笔记就够,别把整份数据抄进笔记。',
       typeof rounds === 'number'
         ? `World 估这活儿大概 ${rounds} 轮;预算归你,最多 ${COGNITION_ROUNDS.hard} 轮工具循环、整体 15 分钟。`

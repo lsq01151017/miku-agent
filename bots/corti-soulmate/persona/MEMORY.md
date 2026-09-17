@@ -5,7 +5,7 @@ persona/ 的最外层目录。地图不是答案:想往里翻,照着它用 list_
 note/playbook/(手册,行动前查阅;这里只列名,内容用 read_file 展开):
 {{memory.playbooks | (还没有手册)}}
 
-external/qq/images/(存下来的图,最近 5 个;句柄 mem:external/qq/images/<文件名> 可交给 draft 的 image 参数发出去;看见的图用 save_blob 存进来):
+external/images/(存下来的图,最近 5 个;句柄 mem:external/images/<文件名> 可交给要发图的工具;看见的图用 save_blob 存进来):
 {{memory.images | (还没有存过图)}}
 
 【MEMORY 1·认知】

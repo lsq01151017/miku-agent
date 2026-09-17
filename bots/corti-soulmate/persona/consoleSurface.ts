@@ -1,4 +1,4 @@
-/** Persona 的服务端 Memory 分层面板与人格文本声明。工作区与版本历史两块在 bots/cormini/persona/consoleSurface.ts;浏览器实现位于 console/;部署级操作由 console-page.ts 提供。 */
+﻿/** Persona 的服务端 Memory 分层面板与人格文本声明。工作区与版本历史两块在 bots/cormini/persona/consoleSurface.ts;浏览器实现位于 console/;部署级操作由 console-page.ts 提供。 */
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MEMORY_VAR_DECLS } from './memory.ts';
@@ -83,7 +83,7 @@ const ZONE_SAMPLES: Array<{ zone: Zone; label: string; path: string }> = [
   { zone: 'people', label: 'people/(人)', path: 'people/sample.md' },
   { zone: 'worldview', label: 'WORLDVIEW.md(综合认知)', path: 'WORLDVIEW.md' },
   { zone: 'constitution', label: 'CONSTITUTION.md(宪法)', path: 'CONSTITUTION.md' },
-  { zone: 'external', label: 'external/(World 自己的抽屉)', path: 'external/qq/sample.md' },
+  { zone: 'external', label: 'external/(World 自己的抽屉)', path: 'external/sample.md' },
   { zone: 'other', label: '其它(自建目录)', path: 'sample.md' },
 ];
 
@@ -148,7 +148,7 @@ function memoryState(deps: PersonaConsoleDeps): MemoryState {
       {
         id: 'MEMORY 0',
         title: '地图',
-        detail: 'persona/ 最外层目录 + note/playbook/ 一级条目 + external/qq/images 最近 5 个。地图不是答案,往里翻要用工具。',
+        detail: 'persona/ 最外层目录 + note/playbook/ 一级条目 + external/images 最近 5 个。地图不是答案,往里翻要用工具。',
         live: `${topLevel} 个顶层条目`,
       },
       {

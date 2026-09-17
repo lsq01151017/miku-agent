@@ -26,8 +26,8 @@ const HERE = resolve(import.meta.dirname);
 const ORIENTATION_FILE = resolve(HERE, 'persona/ORIENTATION.md');
 
 /**
- * 这个 Persona 为之设计的渠道。表现层接进来后加进这里;bilibili、QQ、Minecraft
- * 这些渠道不声明:她的活动范围只有终端与自己的形象。
+ * 这个 Persona 为之设计的渠道:终端与自己的形象。别的平台不声明——渠道是扩展点,
+ * 要接哪个就写一个 World 包,再把它的 id 加到这里。
  */
 const DECLARES: readonly WorldDeclaration[] = ['terminal', 'live2d'];
 
