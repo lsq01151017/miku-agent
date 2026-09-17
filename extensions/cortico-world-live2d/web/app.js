@@ -98,6 +98,8 @@
   var view = { zoom: 1, x: 0, y: 0 };
   var fitScale = 1;
   var dragging = null;
+  /** 只启动一次(见 boot)。 */
+  var booted = false;
   // 眼神跟随:目标来自指针位置,当前值指数逼近它。
   var look = { x: 0, y: 0, targetX: 0, targetY: 0 };
   var lookParams = null;
@@ -374,9 +376,14 @@
     // 画面里直接拖:一次拖动的位移就是取景偏移,松手即定。
     if (el.canvas && el.canvas.addEventListener) {
       el.canvas.addEventListener('pointerdown', function (event) {
+        // 挡掉原生拖拽:不然浏览器会拖着一份画布副本跟鼠标走,看着就像多了一个模型。
+        if (event && event.preventDefault) event.preventDefault();
         dragging = { x: event.clientX, y: event.clientY, fromX: view.x, fromY: view.y };
         if (el.canvas.className.indexOf('dragging') < 0) el.canvas.className += ' dragging';
         if (el.canvas.setPointerCapture) { try { el.canvas.setPointerCapture(event.pointerId); } catch (e) { /* 可选 */ } }
+      });
+      el.canvas.addEventListener('dragstart', function (event) {
+        if (event && event.preventDefault) event.preventDefault();
       });
       el.canvas.addEventListener('pointermove', function (event) {
         if (!dragging) return;
@@ -530,6 +537,10 @@
   }
 
   async function boot() {
+    // 只许进一次:脚本万一被加载两次,第二个 PIXI 应用会拿到同一个 canvas 的同一个 WebGL 上下文,
+    // 两个舞台各画一个模型——屏幕上就是两个她。
+    if (booted) return;
+    booted = true;
     if (typeof PIXI === 'undefined' || !PIXI.live2d || !PIXI.live2d.Live2DModel) {
       why('播放器库没加载成功:检查 worlds.live2d.webDir 指向的目录里有没有 js/ 下那三个文件。');
       return;

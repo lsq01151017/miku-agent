@@ -15,7 +15,8 @@
     --glass-accent: #39c5bb;
   }
   html, body { margin: 0; height: 100%; background: #10161a; overflow: hidden; }
-  canvas { display: block; cursor: grab; }
+  /* 画布不许被浏览器当图片拖走:原生拖拽会跟着鼠标浮出一份半透明副本,看着就像出现了两个模型。 */
+  canvas { display: block; cursor: grab; -webkit-user-drag: none; user-select: none; touch-action: none; }
   canvas.dragging { cursor: grabbing; }
 
   .glass {
@@ -41,13 +42,13 @@
   }
   #talk a { color: var(--glass-accent); }
 
-  /* 她的回答:浮在模型上方的一条扁字幕。比输入区还扁还长,衬底更薄。 */
+  /* 她的回答:浮在模型上方的一条扁字幕。比输入区略长,衬底回到能看清字的那一版。 */
   #subtitle {
     position: fixed; left: 50%; transform: translateX(-50%); bottom: 68px;
-    width: min(1400px, calc(100vw - 24px)); padding: 1px 16px; border-radius: 6px;
-    border: 0; background: rgba(8, 14, 18, 0.20);
-    -webkit-backdrop-filter: blur(6px);
-    backdrop-filter: blur(6px);
+    width: min(1140px, calc(100vw - 28px)); padding: 1px 16px; border-radius: 6px;
+    border: 0; background: rgba(10, 16, 20, 0.34);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
     color: var(--glass-ink); font: 15px/1.32 system-ui, sans-serif;
     text-align: center; white-space: pre-wrap; word-break: break-word;
     opacity: 0; transition: opacity .18s ease;
@@ -122,7 +123,7 @@
 </style>
 </head>
 <body>
-<canvas id="stage"></canvas>
+<canvas id="stage" draggable="false"></canvas>
 <div id="conn" class="glass">连接中…</div>
 <div id="talk" class="glass">这一页是她的身体。<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话。拖动画面可以挪动她。</div>
 <div id="why"></div>
