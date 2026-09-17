@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 上下文事实的来源:上游自报窗口(Provider 实例的模型目录)与手填窗口取小,
  * "输入超过上下文"的拒绝由 Provider 模块识别。
  */
@@ -64,7 +64,6 @@ describe('Core · 生效窗口', () => {
         : new Response('', { status: 404 })));
     tmp = makeTmpDir();
     const config = makeCfg();
-    config.worlds.qq.enabled = false;
     config.providers = {
       local: {
         kind: 'openai-responses-compat',

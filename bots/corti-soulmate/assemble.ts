@@ -6,9 +6,7 @@ import { createBot } from 'cortico/bot.ts';
 import { loadDeployment, type LoadedConfig } from 'cortico/deploy.ts';
 import { withWorlds } from 'cortico/world.ts';
 import { BUILTIN_WORLDS } from 'cortico/worlds/index.ts';
-import { QQWorld } from 'cortico/worlds/qq/world.ts';
 import { TerminalWorld } from 'cortico/worlds/terminal/world.ts';
-import { WebSearchWorld } from 'cortico/worlds/websearch/world.ts';
 import type { CortiSoulmate } from './persona/index.ts';
 import type { Dream } from './persona/subconscious/index.ts';
 import packageDefinition, { type BotConfig } from './index.ts';
@@ -33,9 +31,7 @@ export function loadConfig(botDir: string): LoadedConfig<BotConfig> {
 export interface AssembledBot extends Bot<BotConfig> {
   persona: CortiSoulmate;
   dream: Dream;
-  qqWorld: QQWorld | null;
   terminalWorld: TerminalWorld | null;
-  webSearchWorld: WebSearchWorld | null;
 }
 
 export function assembleBot(
@@ -52,8 +48,6 @@ export function assembleBot(
   return Object.assign(bot, {
     persona,
     dream: persona.dream,
-    qqWorld: find(QQWorld),
     terminalWorld: find(TerminalWorld),
-    webSearchWorld: find(WebSearchWorld),
   });
 }

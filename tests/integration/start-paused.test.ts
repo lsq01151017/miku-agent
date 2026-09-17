@@ -1,4 +1,4 @@
-import { messages as legacyMessages } from '../core/fixture-protocol.ts';
+﻿import { messages as legacyMessages } from '../core/fixture-protocol.ts';
 /** 验证 launcher.ts 的启动暂停顺序:boot 事件排队,继续后才调用模型。 */
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -30,7 +30,6 @@ describe('启动即暂停', () => {
     const cfg = makeCfg();
     cfg.batching.quietGapMs = 20;
     cfg.batching.maxBatchAgeMs = 200;
-    cfg.worlds.qq.enabled = false;
     cfg.worlds.terminal.enabled = true;
     cfg.web.port = 0;
     const loaded = makeLoaded({

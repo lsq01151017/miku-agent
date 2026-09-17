@@ -16,13 +16,9 @@ import { AUTHOR_OPERATOR } from '../cormini/persona/workspaceGit.ts';
 import { PERSONA_CONFIG_GROUP, PERSONA_DEFAULTS } from './persona/config.ts';
 import type { PersonaConfig } from './persona/config.ts';
 
-import { type QQConfigSection } from 'cortico/worlds/qq/config.ts';
 import type { TerminalConfigSection } from 'cortico/worlds/terminal/config.ts';
 import type { TerminalWorld } from 'cortico/worlds/terminal/world.ts';
-import { type WebSearchConfigSection } from 'cortico/worlds/websearch/config.ts';
 import type { CoreConfig } from 'cortico/core/types.ts';
-
-export type { QQConfigSection, WebSearchConfigSection };
 
 /**
  * 部署级配置组合 CoreConfig 与Persona及各挂载 World 的配置声明。
@@ -36,14 +32,12 @@ export interface BotConfig extends CoreConfig {
   tick: PersonaConfig['tick'];
   dream: PersonaConfig['dream'];
   worlds: {
-    qq: QQConfigSection;
     terminal: TerminalConfigSection;
-    websearch: WebSearchConfigSection;
   };
 }
 
 /** 这个Persona为之设计的渠道,默认启用。 */
-const DECLARES: readonly WorldDeclaration[] = ['qq', 'terminal', 'websearch'];
+const DECLARES: readonly WorldDeclaration[] = ['terminal'];
 
 /** 层 2 给云端那条端点的模型档:全局端点表里没写时用它。 */
 const DEEPSEEK_SPEC: ModelSpec = {

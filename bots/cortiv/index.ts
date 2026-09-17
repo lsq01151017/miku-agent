@@ -6,8 +6,6 @@ import type { LoadedConfig } from 'cortico/deploy.ts';
 import { CORE_DEFAULTS } from 'cortico/core/config.ts';
 import type { WorldDeclaration, WorldSection } from 'cortico/world.ts';
 import type { TerminalConfigSection } from 'cortico/worlds/terminal/config.ts';
-import type { BilibiliConfigSection } from 'cortico/worlds/bilibili/config.ts';
-import type { MinecraftConfigSection } from 'cortico/worlds/minecraft/config.ts';
 import { CortiV } from './persona/persona.ts';
 import type { ContextStagePolicy } from '../cormini/persona/persona.ts';
 import { contextStageConfigGroup } from '../cormini/persona/config.ts';
@@ -34,7 +32,7 @@ const ORIENTATION_FILE = resolve(HERE, 'persona/ORIENTATION.md');
  * 这个Persona为之设计的渠道。实现由启动器并进来(仓内目录加扩展),哪些挂载由 config.json 的
  * `worlds.<id>.enabled` 决定,控制台可热切;`vtuber` 与 `asr` 是扩展包,没装时是灰卡。
  */
-const DECLARES: readonly WorldDeclaration[] = ['terminal', 'vtuber', 'bilibili', 'asr', 'minecraft', 'pvz', 'canvas'];
+const DECLARES: readonly WorldDeclaration[] = ['terminal', 'vtuber', 'asr', 'pvz', 'canvas'];
 
 /**
  * 上下文与交接容量配置归Persona，控制台表单与 bots/cormini/persona/config.ts 共用。
@@ -56,7 +54,7 @@ export const CORTIV_COGNITION_CONFIG_GROUP: ConfigGroup = {
         title: '允许 World 请托后台思考',
         'x-hot': true,
         description:
-          '开:World 可以请她想事情(如 Minecraft 的蓝图设计),用的是主档模型、'
+          '开:World 可以请她想事情(如后台构思一件作品),用的是主档模型、'
           + '最多 8 轮工具循环、整体 15 分钟封顶。'
           + '关:这个能力对 World 直接消失(不是报错),World 各自走自己的兜底路子。'
           + '改完立刻生效,不用重启。',
@@ -78,8 +76,6 @@ export interface CortiVConfig extends CoreConfig {
     terminal: TerminalConfigSection;
     /** 外部包 `cortico-world-vtuber` 的段:形状归那个包,Persona只知道它在。 */
     vtuber: WorldSection & Record<string, unknown>;
-    bilibili: BilibiliConfigSection;
-    minecraft: MinecraftConfigSection;
     /** 扩展包 `cortico-world-pvz` 的段,同上。 */
     pvz: WorldSection & Record<string, unknown>;
     /** 扩展包 `cortico-world-asr` 的段,同上。 */
@@ -152,11 +148,11 @@ const definition: BotDefinition<CortiVConfig> = {
     // (单轮生成上限)搞混:那两样归 provider,Persona拿不到。
     context: { maxTokens: 64000, keepRatio: 1 / 4, softRatio: 0.85, firstTurn: false, ...CORE_DEFAULTS.context },
     tick: { intervalMinutes: 45 },
-    // 默认开:蓝图设计就走这条,关掉它 Minecraft 那边的 design 只能如实拒收。
+    // 默认开:World 请她后台想事情就走这条,关掉它那边只能如实拒收。
     cognition: { enabled: true },
     rounds: { soft: 6, hard: 12 },
     // World 段不在这里:实现的默认值由启动器补。人格身份与演出选择
-    // (`minecraft.username`、`vtuber.delayedSources`、要不要开视觉)在
+    // (`vtuber.delayedSources`、要不要开视觉)在
     // bots/cortiv/worlds/<id>/config.json,本机事实(凭证、程序路径、设备、开没开)
     // 在这份部署的 config.json。
   } as unknown as CortiVConfig),

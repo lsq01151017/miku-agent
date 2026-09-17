@@ -1,4 +1,4 @@
-import { records } from './fixture-protocol.ts';
+﻿import { records } from './fixture-protocol.ts';
 /**
  * 认知请求的工具归属、开关、并发统计与用量契约。
  * World 提供 brief 和自身工具；Persona 决定处理方式与预算，模型来自活跃端点。
@@ -74,7 +74,6 @@ interface Rig {
 async function rig(cognition?: PersonaCognition): Promise<Rig> {
   const tmp = makeTmpDir();
   const config = makeCfg();
-  config.worlds.qq.enabled = false;
   const loaded = makeLoaded({
     config,
     rootDir: tmp.dir,

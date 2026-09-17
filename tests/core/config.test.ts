@@ -7,7 +7,6 @@ import { loadDeployment } from '../../src/deploy.ts';
 import { CORE_DEFAULTS } from '../../src/core/config.ts';
 import { composeDefaults, loadConfig } from '../../bots/corti-soulmate/assemble.ts';
 import { PERSONA_DEFAULTS } from '../../bots/corti-soulmate/persona/config.ts';
-import { VISION_DEFAULTS } from '../../src/worlds/qq/vision.ts';
 
 function withConfig(json: unknown): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), 'bot-cfgtest-'));
@@ -37,9 +36,8 @@ describe("部署配置合并与默认值归属", () => {
     expect(cfg.context.maxTokens).toBe(PERSONA_DEFAULTS.context.maxTokens);
     // Persona 设置阶段预算，模型容量由 provider 配置决定。
     expect(cfg.context.keepPastThinking).toBe(CORE_DEFAULTS.context.keepPastThinking);
-    // Vision 默认值属于 QQ World，不是顶层配置段。
-    expect(cfg.worlds.qq.vision).toEqual(VISION_DEFAULTS);
-    expect(cfg.worlds.websearch.enabled).toBe(true);
+    // World 默认值住在各自的世界段里,不是顶层配置。
+    expect(cfg.worlds.terminal.pin).toBe('');
   });
 
   it("部署 config.json 覆盖 Persona 建议值", () => {
@@ -83,43 +81,43 @@ describe("部署配置合并与默认值归属", () => {
   });
 });
 
-describe('loadConfig:worlds.qq.groups/privates', () => {
-  it('无config.json → 默认空roster', () => {
-    const { dir, cleanup } = withConfig(undefined);
+describe('loadConfig:段里的数组整段替换,不与默认值合并', () => {
+  /** 用一个自带数组段的最小定义:这条语义不依赖任何一个仓内 World。 */
+  const definition = {
+    defaults: () => ({
+      ...composeDefaults(),
+      worlds: { demo: { enabled: false, roster: [] as Array<{ id: number; enabled: boolean }> } },
+    }),
+  };
+  const load = (json: unknown): { dir: string; cleanup: () => void; config: { worlds: { demo: { enabled: boolean; roster: Array<{ id: number; enabled: boolean }> } } } } => {
+    const { dir, cleanup } = withConfig(json);
+    return { dir, cleanup, config: loadDeployment(definition as never, dir, dir).config as never };
+  };
+
+  it('无config.json → 默认空数组', () => {
+    const site = load(undefined);
     try {
-      const { config } = loadConfig(dir);
-      expect(config.worlds.qq.groups).toEqual([]);
-      expect(config.worlds.qq.privates).toEqual([]);
-    } finally { cleanup(); }
+      expect(site.config.worlds.demo.roster).toEqual([]);
+    } finally { site.cleanup(); }
   });
 
-  it('config.json 写的{id,enabled}[]整段替换默认空roster(含disabled条目)', () => {
-    const { dir, cleanup } = withConfig({
-      worlds: { qq: { groups: [{ id: 111, enabled: false }, { id: 222, enabled: true }], privates: [{ id: 333, enabled: true }] } },
+  it('config.json 写的{id,enabled}[]整段替换默认空数组(含 disabled 条目)', () => {
+    const site = load({
+      worlds: { demo: { roster: [{ id: 111, enabled: false }, { id: 222, enabled: true }] } },
     });
     try {
-      const { config } = loadConfig(dir);
-      expect(config.worlds.qq.groups).toEqual([{ id: 111, enabled: false }, { id: 222, enabled: true }]);
-      expect(config.worlds.qq.privates).toEqual([{ id: 333, enabled: true }]);
-    } finally { cleanup(); }
+      expect(site.config.worlds.demo.roster).toEqual([{ id: 111, enabled: false }, { id: 222, enabled: true }]);
+    } finally { site.cleanup(); }
   });
 
   it('每次加载都拿到独立配置树,不会把运行时热改泄漏进默认值', () => {
-    const first = withConfig({ worlds: { qq: { groups: [{ id: 555, enabled: true }] } } });
-    const second = withConfig(undefined);
+    const first = load({ worlds: { demo: { roster: [{ id: 555, enabled: true }] } } });
+    const second = load(undefined);
     try {
-      const loaded = loadConfig(first.dir).config;
-      expect(loaded.worlds.qq.groups).toEqual([{ id: 555, enabled: true }]);
-      loaded.context.maxTokens = 42;
-      loaded.providers.deepseek.baseUrl = 'https://changed.test';
-
-      const fresh = loadConfig(second.dir).config;
-      expect(fresh.worlds.qq.groups).toEqual([]);
-      expect(fresh.context.maxTokens).toBe(PERSONA_DEFAULTS.context.maxTokens);
-      expect(fresh.providers.deepseek.baseUrl).toBe(CORE_DEFAULTS.providers.deepseek.baseUrl);
-      expect(composeDefaults().worlds.qq.groups).toEqual([]);
-      expect(composeDefaults().context.maxTokens).toBe(PERSONA_DEFAULTS.context.maxTokens);
-      expect(composeDefaults().providers.deepseek.baseUrl).toBe(CORE_DEFAULTS.providers.deepseek.baseUrl);
+      first.config.worlds.demo.enabled = true;
+      expect(first.config.worlds.demo.roster).toEqual([{ id: 555, enabled: true }]);
+      expect(second.config.worlds.demo.roster).toEqual([]);
+      expect(second.config.worlds.demo.enabled).toBe(false);
     } finally {
       first.cleanup();
       second.cleanup();

@@ -23,7 +23,6 @@
     "audit:release": "tsx scripts/release-audit.ts",
     "check:extension": "tsx scripts/extension-check.ts",
     "logq": "tsx scripts/logq.ts",
-    "dev:console": "tsx scripts/dev-console.ts",
     "bots": "tsx src/launcher.ts --list"
   },
   "dependencies": {
@@ -31,14 +30,10 @@
     "@codemirror/view": "^6.43.8",
     "express": "^4.21.2",
     "fflate": "0.8.3",
-    "mineflayer": "^4.37.1",
-    "mineflayer-pathfinder": "^2.4.5",
-    "prismarine-viewer": "^1.33.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-textarea-autosize": "^8.5.9",
     "tar-stream": "3.2.1",
-    "vec3": "^0.2.0",
     "ws": "^8.18.0"
   },
   "devDependencies": {

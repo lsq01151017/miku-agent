@@ -1,4 +1,4 @@
-import { FixtureHandoffResult as ContextHandoffResult } from './fixture-protocol.ts';
+﻿import { FixtureHandoffResult as ContextHandoffResult } from './fixture-protocol.ts';
 import { createResponse, type StreamEvent, type FunctionCall } from '../../src/protocol/open-responses/index.ts';
 import { unknownMeters, type ProviderAttempt } from '../../src/core/generation.ts';
 import { FixtureTap as OutputTap } from './fixture-protocol.ts';
@@ -3087,7 +3087,6 @@ describe("deliver:false 与隐藏 World 的事件归档后推进水位", () => {
   async function build(): Promise<void> {
     tmp = makeTmpDir();
     const cfg = makeCfg();
-    cfg.worlds.qq.enabled = false;
     const probe = makeFakeIO('probe');
     let captured: WorldHost | null = null;
     probe.start = async (h) => { captured = h; };

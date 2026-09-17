@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 验证恰好一个接收事件的常驻 session，以及 fork 的声明解析、并发统计和计量。
  * fork 模型来自活跃端点，工具和轮数来自声明；session id 仅作为查表键。
  */
@@ -33,7 +33,6 @@ import {
 
 function loadedFor(dir: string): LoadedConfig<BotConfig> {
   const config = makeCfg();
-  config.worlds.qq.enabled = false;
   return makeLoaded({
     config,
     rootDir: dir,

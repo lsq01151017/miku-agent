@@ -11,7 +11,7 @@ import type { BotConfig } from '../../bots/corti-soulmate/assemble.ts';
 import { composeDefaults } from '../../bots/corti-soulmate/assemble.ts';
 import { CORE_CONFIG_GROUP } from '../../src/core/config.ts';
 import { PERSONA_CONFIG_GROUP } from '../../bots/corti-soulmate/persona/config.ts';
-import { WEBSEARCH_CONFIG_GROUP } from '../../src/worlds/websearch/config.ts';
+import { LIVE2D_CONFIG_GROUP } from '../../extensions/cortico-world-live2d/src/config.ts';
 import { readGroupValues, setByPath, type ConfigGroup } from '../../src/core/config-schema.ts';
 import { FakeStore } from './fakes.ts';
 
@@ -36,7 +36,7 @@ const postJ = async (p: string, body?: any): Promise<{ status: number; body: any
 const cfg: BotConfig = JSON.parse(JSON.stringify(composeDefaults())) as BotConfig;
 cfg.dream.maxRounds = 6;
 cfg.batching.quietGapMs = 2500;
-const configGroups: ConfigGroup[] = [CORE_CONFIG_GROUP, PERSONA_CONFIG_GROUP, WEBSEARCH_CONFIG_GROUP];
+const configGroups: ConfigGroup[] = [CORE_CONFIG_GROUP, PERSONA_CONFIG_GROUP, LIVE2D_CONFIG_GROUP];
 
 beforeAll(async () => {
   memoryDir = mkdtempSync(join(tmpdir(), 'webpersona-'));
@@ -129,7 +129,7 @@ describe('/api/config', () => {
     expect((await postJ('/api/config', { group: PERSONA_CONFIG_GROUP.id, values: { 'dream.maxRounds': 4 } })).status).toBe(200);
     expect((await postJ('/api/config', { group: PERSONA_CONFIG_GROUP.id, values: { 'dream.maxRounds': 0 } })).status).toBe(400);
     expect((await postJ('/api/config', { group: PERSONA_CONFIG_GROUP.id, values: { 'tick.dayIntervalMinutes': [90, 30] } })).status).toBe(400);
-    expect((await postJ('/api/config', { group: 'world:websearch', values: { 'worlds.websearch.safesearch': 'nope' } })).status).toBe(400);
+    expect((await postJ('/api/config', { group: `world:live2d`, values: { 'worlds.live2d.port': 'nope' } })).status).toBe(400);
     expect((await postJ('/api/config', { group: 'world:nonexistent', values: {} })).status).toBe(400);
     // 配置组只能更新其 schema 声明的键:provider 表与活跃指针都不在 core 组里。
     const sneak = await postJ('/api/config', {

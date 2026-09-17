@@ -1,4 +1,4 @@
-import { messages as legacyMessages } from '../core/fixture-protocol.ts';
+﻿import { messages as legacyMessages } from '../core/fixture-protocol.ts';
 /** 通过临时部署与脚本化模型验证终端 WebSocket、事件存储、工具调用和控制台 API。 */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -45,7 +45,6 @@ describe('全系统集成(终端对话链路)', () => {
     };
     cfg.batching.quietGapMs = 40;
     cfg.batching.maxBatchAgeMs = 500;
-    cfg.worlds.qq.enabled = false;
     cfg.worlds.terminal.enabled = true;
     cfg.web.port = 0;
 

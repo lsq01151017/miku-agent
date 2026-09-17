@@ -1,4 +1,4 @@
-import { responseRequest } from '../../src/protocol/open-responses/context-helpers.ts';
+﻿import { responseRequest } from '../../src/protocol/open-responses/context-helpers.ts';
 import { records } from './fixture-protocol.ts';
 import type { ChatMessage } from './fixture-types.ts';
 import type { ModelSpec, ToolSchema } from '../../src/core/types.ts';
@@ -20,7 +20,6 @@ import { makeCfg, makeFakeIO, makeFakePersona, makeLoaded, makeTmpDir } from './
 function buildHarness() {
   const tmp = makeTmpDir();
   const config = makeCfg();
-  config.worlds.qq.enabled = false;
   config.providers = {
     deepseek: {
       kind: 'openai-responses-compat',
