@@ -32,6 +32,8 @@ import { Performance } from './performance.ts';
 import { LIVE2D_CONFIG_GROUP, type Live2DConfigSection } from './config.ts';
 
 const WEB_DIR = fileURLToPath(new URL('../web/', import.meta.url));
+/** 环境提示词随包走,不在工作区里。 */
+const ENV_PROMPT_FILE = fileURLToPath(new URL('../ENV_PROMPT.md', import.meta.url));
 /** 推流间隔。60ms 比 60fps 略慢:画面里的平滑在浏览器侧做,这里不必更密。 */
 const PUSH_INTERVAL_MS = 60;
 const KEEPALIVE_MS = 15_000;
@@ -81,6 +83,18 @@ export class Live2DWorld implements World {
   constructor(opts: Live2DWorldOptions) {
     this.cfg = opts.cfg;
     this.packageDir = opts.packageDir;
+    // 随包的资源先确认在。包装漏了它们时,在这里以"构造失败"报出来,
+    // 而不是等前缀装配去读环境提示词时把主循环带崩。
+    const assets: ReadonlyArray<readonly [string, string]> = [
+      ['播放器页面', join(WEB_DIR, 'index.html')],
+      ['页面脚本', join(WEB_DIR, 'app.js')],
+      ['环境提示词', ENV_PROMPT_FILE],
+    ];
+    for (const [what, file] of assets) {
+      if (!existsSync(file)) {
+        throw new Error(`${what}不在扩展包里(${file});package.json 的 files 要包含 web/ 与 ENV_PROMPT.md`);
+      }
+    }
   }
 
   /**
@@ -129,7 +143,7 @@ export class Live2DWorld implements World {
         key: 'worlds.live2d.envPrompt',
         title: '形象',
         description: '告诉她身体怎么被驱动,免得她用文字描述自己的表情。',
-        path: fileURLToPath(new URL('../ENV_PROMPT.md', import.meta.url)),
+        path: ENV_PROMPT_FILE,
         role: 'envPrompt',
         vars: [],
       }],

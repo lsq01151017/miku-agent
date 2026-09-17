@@ -19,6 +19,8 @@
   },
   "files": [
     "src",
+    "web",
+    "ENV_PROMPT.md",
     "README.md"
   ],
   "scripts": {
