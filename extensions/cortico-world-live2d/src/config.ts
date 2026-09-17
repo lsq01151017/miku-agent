@@ -59,6 +59,13 @@ export interface Live2DConfigSection extends WorldSection {
    * 的时候也不是一张静止的图,台词与情绪基线才叠在活人身上。
    */
   idleAmount: number;
+  /**
+   * 控制台地址,例如 `http://127.0.0.1:18790`。
+   *
+   * 填了它,形象页就能挂一个对话框:页面连本 World 的 `/chat`,由这里转到控制台的终端通道。
+   * 页面因此只有一个来源,不必知道控制台在哪个端口。留空就是没有对话框。
+   */
+  consoleUrl: string;
 }
 
 export const LIVE2D_DEFAULTS: Live2DConfigSection = {
@@ -77,6 +84,7 @@ export const LIVE2D_DEFAULTS: Live2DConfigSection = {
   speechTailMs: 600,
   speechMsPerChar: 130,
   idleAmount: 1,
+  consoleUrl: '',
 };
 
 export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
@@ -179,6 +187,12 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         minimum: 0,
         maximum: 3,
         description: '呼吸、微晃、视线游移的幅度倍率,一直在跑;设 0 她就完全静止。',
+      },
+      'consoleUrl': {
+        type: 'string',
+        title: '控制台地址',
+        description: '例如 http://127.0.0.1:18790。填了它,形象页的对话框就把话转到控制台的终端通道;'
+          + '留空则形象页没有对话框。',
       },
     },
   },

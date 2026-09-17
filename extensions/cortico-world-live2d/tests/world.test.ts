@@ -5,7 +5,9 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { WebSocket, WebSocketServer } from 'ws';
 import { nullLogger } from 'cortico/core/util.ts';
 import type { WorldHost } from 'cortico/core/types.ts';
 import { LIVE2D_DEFAULTS, type Live2DConfigSection } from '../src/config.ts';
@@ -37,6 +39,8 @@ function config(over: Partial<Live2DConfigSection> = {}): Live2DConfigSection {
 async function start(over: Partial<Live2DConfigSection> = {}): Promise<Live2DWorld> {
   world = new Live2DWorld({ cfg: config(over), packageDir: root });
   await world.start(host);
+  // 端口交给系统挑(配置里写 0),再按实际绑上的端口拼 URL:随机端口会撞车,撞上就测到了别人。
+  port = Number(new URL(world.url()).port);
   return world;
 }
 
@@ -61,7 +65,8 @@ beforeEach(() => {
     'utf8',
   );
   writeFileSync(join(root, 'secret.txt'), '不该被读到', 'utf8');
-  port = 20800 + Math.floor(Math.random() * 200);
+  // 0 = 让系统挑一个空闲端口;`start()` 起完会把它换成实际端口。
+  port = 0;
 });
 
 afterEach(async () => {
@@ -157,6 +162,7 @@ describe('内部状态驱动', () => {
     pre.setInternalState({ valence: 0.9, arousal: 0.6, bond: 0.2, loneliness: 0.2, shyness: 0.1, empathy: 0 });
     world = pre;
     await pre.start(host);
+    port = Number(new URL(pre.url()).port);
     const controller = new AbortController();
     const frame = await firstFrame(controller.signal) as { channels: Record<string, number> };
     controller.abort();
@@ -363,6 +369,57 @@ describe('台词即演出指令', () => {
     expect(payload.available).toEqual(['blush', 'heart', 'lean', 'sing']);
     expect([...new Set(payload.cues.map((cue) => cue.expression))].sort())
       .toEqual(['blush', 'heart', 'lean', 'sing']);
+  });
+});
+
+describe('对话框', () => {
+  it('没配控制台地址时这一块就是关的', async () => {
+    const live = await start();
+    expect(await (await fetch(url('/pack/chat.json'))).json()).toEqual({ enabled: false });
+  });
+
+  it('配了控制台地址:页面的话转到终端通道,她的话回到页面', async () => {
+    // 假控制台:一个真的 WebSocket 服务端,收到什么就记下来,并回一句。
+    const consoleServer = new WebSocketServer({ port: 0, host: '127.0.0.1' });
+    await new Promise<void>((done) => consoleServer.once('listening', () => done()));
+    const consolePort = (consoleServer.address() as AddressInfo).port;
+    const received: string[] = [];
+    consoleServer.on('connection', (socket) => {
+      socket.on('message', (data) => {
+        const text = data.toString();
+        received.push(text);
+        if (text.includes('你好')) socket.send(JSON.stringify({ type: 'msg', from: '初音未来', text: '在的哦' }));
+      });
+    });
+    let client: WebSocket | null = null;
+    try {
+      const live = await start({ consoleUrl: `http://127.0.0.1:${consolePort}` });
+      expect(await (await fetch(url('/pack/chat.json'))).json()).toEqual({ enabled: true });
+
+      client = new WebSocket(`ws://127.0.0.1:${port}/chat`);
+      const frames: string[] = [];
+      client.on('message', (data) => frames.push(data.toString()));
+      await new Promise<void>((done) => client!.once('open', () => done()));
+      client.send(JSON.stringify({ type: 'msg', text: '你好' }));
+      for (let i = 0; i < 40 && frames.length === 0; i++) await new Promise((r) => setTimeout(r, 25));
+
+      expect(received.some((message) => message.includes('你好'))).toBe(true);
+      expect(frames.some((message) => message.includes('在的哦'))).toBe(true);
+    } finally {
+      client?.close();
+      await new Promise<void>((done) => consoleServer.close(() => done()));
+    }
+  });
+
+  it('控制台不在时给页面一句能读懂的话', async () => {
+    const live = await start({ consoleUrl: 'http://127.0.0.1:1' });
+    const client = new WebSocket(`ws://127.0.0.1:${port}/chat`);
+    const frames: string[] = [];
+    client.on('message', (data) => frames.push(data.toString()));
+    await new Promise<void>((done) => client.once('open', () => done()));
+    for (let i = 0; i < 40 && frames.length === 0; i++) await new Promise((r) => setTimeout(r, 25));
+    expect(frames.join(' ')).toContain('连不上控制台');
+    client.close();
   });
 });
 

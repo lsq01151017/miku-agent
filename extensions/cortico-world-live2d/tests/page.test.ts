@@ -27,7 +27,7 @@ interface FakeNode {
   fire: (type: string, event?: Record<string, unknown>) => void;
 }
 
-/** 一次性的浏览器替身:记录页面写进模型的参数、切过的表情、面板上的数与取景。 */
+/** 一次性的浏览器替身:记录页面写进模型的参数、切过的表情、面板上的数与取景,以及对话框。 */
 function stubBrowser(): {
   written: Written[];
   expressions: string[];
@@ -36,6 +36,7 @@ function stubBrowser(): {
   nodes: Map<string, FakeNode>;
   stored: string[];
   instances: Array<{ onmessage: ((event: { data: string }) => void) | null }>;
+  sockets: Array<{ url: string; sent: string[]; readyState: number; fire: (data: string) => void }>;
   /** 触发 window 上的事件(页面用它接指针)。 */
   fireWindow: (type: string, event: Record<string, unknown>) => void;
   /** 跑 n 帧:每帧先走页面的 requestAnimationFrame,再走模型的 beforeModelUpdate。 */
@@ -48,6 +49,10 @@ function stubBrowser(): {
   const nodes = new Map<string, FakeNode>();
   const stored: string[] = [];
   const instances: Array<{ onmessage: ((event: { data: string }) => void) | null }> = [];
+  const sockets: Array<{
+    url: string; sent: string[]; readyState: number;
+    fire: (data: string) => void; onopen: (() => void) | null; onmessage: ((event: { data: string }) => void) | null;
+  }> = [];
   let pending: (() => void) | null = null;
   let beforeModelUpdate: (() => void) | null = null;
   let fakeNowMs = 0;
@@ -97,7 +102,7 @@ function stubBrowser(): {
 
   const globals = globalThis as Record<string, unknown>;
   // 这些全局会一直被后面的测试文件用到:进来之前先存一份,跑完原样还回去。
-  for (const key of ['document', 'window', 'requestAnimationFrame', 'PIXI', 'fetch', 'EventSource', 'performance']) {
+  for (const key of ['document', 'window', 'requestAnimationFrame', 'PIXI', 'fetch', 'EventSource', 'performance', 'WebSocket']) {
     if (!saved.has(key)) saved.set(key, globals[key]);
   }
   globals.performance = { now: () => fakeNowMs };
@@ -107,8 +112,8 @@ function stubBrowser(): {
   };
   const windowHandlers: Record<string, Array<(event: Record<string, unknown>) => void>> = {};
   globals.window = {
-    innerWidth: 800,
-    innerHeight: 600,
+    innerWidth: 1600,
+    innerHeight: 900,
     addEventListener: (type: string, fn: (event: Record<string, unknown>) => void) => {
       (windowHandlers[type] = windowHandlers[type] ?? []).push(fn);
     },
@@ -119,7 +124,27 @@ function stubBrowser(): {
       getItem: () => null,
       setItem: (_key: string, value: string) => { stored.push(value); },
     },
+    location: { protocol: 'http:', host: '127.0.0.1:18795' },
     __DSH_MODEL_FILE__: 'miku.model3.json',
+  };
+  // 假 WebSocket:记下页面发出去的东西,并让测试能装作她回了话。
+  globals.WebSocket = class {
+    url: string;
+    sent: string[] = [];
+    readyState = 0;
+    onopen: (() => void) | null = null;
+    onclose: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onmessage: ((event: { data: string }) => void) | null = null;
+    constructor(url: string) {
+      this.url = url;
+      const self = this;
+      sockets.push(self as never);
+      setTimeout(() => { self.readyState = 1; self.onopen?.(); }, 0);
+    }
+    send(text: string) { this.sent.push(text); }
+    close() { this.readyState = 3; this.onclose?.(); }
+    fire(data: string) { this.onmessage?.({ data }); }
   };
   globals.requestAnimationFrame = (callback: () => void) => { pending = callback; return 1; };
   globals.PIXI = {
@@ -127,14 +152,17 @@ function stubBrowser(): {
     live2d: { Live2DModel: { from: async () => model } },
   };
   globals.fetch = async (url: string) => ({
-    json: async () => (String(url).includes('overrides')
-      ? { Param137: 1 }
-      : {
+    json: async () => {
+      const target = String(url);
+      if (target.includes('overrides')) return { Param137: 1 };
+      if (target.includes('chat.json')) return { enabled: true };
+      return {
         FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
         MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
         EyeOpenLeft: { param: 'ParamEyeLOpen', range: [-1, 1] },
         EyeLeftX: { param: null, range: null },
-      }),
+      };
+    },
   });
   class FakeEventSource {
     onopen: (() => void) | null = null;
@@ -145,7 +173,7 @@ function stubBrowser(): {
   globals.EventSource = FakeEventSource;
 
   return {
-    written, expressions, scales, positions, nodes, stored, instances,
+    written, expressions, scales, positions, nodes, stored, instances, sockets,
     fireWindow: (type: string, event: Record<string, unknown>) => {
       for (const fn of windowHandlers[type] ?? []) fn(event);
     },
@@ -174,7 +202,7 @@ afterEach(() => {
 });
 
 describe('播放器页面', () => {
-  it('写参数、切表情、显示数值、调取景', async () => {
+  it('写参数、切表情、显示数值、调取景、说话与放置对话框', async () => {
     const stubs = stubBrowser();
     await import('../web/app.js');
     // boot() 是异步的:让它把 channels.json 与模型都取完。
@@ -247,12 +275,12 @@ describe('播放器页面', () => {
     node('offset-x').fire('input');
     node('offset-y').value = '-25' as never;
     node('offset-y').fire('input');
-    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 400 + 40, y: 300 - 25 });
+    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800 + 40, y: 450 - 25 });
 
     // 直接拖画面:拖动位移就是取景偏移,松手即存。
     node('stage').fire('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 });
     node('stage').fire('pointermove', { clientX: 130, clientY: 90, pointerId: 1 });
-    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 400 + 70, y: 300 - 35 });
+    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800 + 70, y: 450 - 35 });
     node('stage').fire('pointerup', {});
     expect(stubs.stored.length).toBeGreaterThan(0);
     expect(JSON.parse(stubs.stored[stubs.stored.length - 1]!)).toMatchObject({ zoom: 1.5, x: 70, y: -35 });
@@ -260,18 +288,18 @@ describe('播放器页面', () => {
     // 复位:回到 100% 与画面中心。
     node('btn-reset').fire('click');
     expect(stubs.scales[stubs.scales.length - 1]).toBeCloseTo(fit, 6);
-    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 400, y: 300 });
+    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800, y: 450 });
     expect(node('zoom-val').textContent).toBe('100%');
     expect(node('offset-x-val').textContent).toBe('0');
 
     // ── 眼神跟随:只眼睛和一点头,身体一律不碰 ─────────────────────────────
     stubs.written.length = 0;
-    stubs.fireWindow('pointermove', { clientX: 800, clientY: 300 });
-    stubs.pump(8); // 8 帧 ≈ 134ms:时间常数 0.08s,足够走到七成以上
+    stubs.fireWindow('pointermove', { clientX: 1600, clientY: 450 });
+    stubs.pump(8); // 8 帧 ≈ 134ms:时间常数 0.03s,早就该到了
     const eyed = stubs.written.filter((entry) => entry.param === 'ParamEyeBallX');
     expect(eyed.length).toBeGreaterThan(0);
-    // 跟得上:推到最右,不到 0.15 秒就该走过七成。
-    expect(eyed[eyed.length - 1]!.value).toBeGreaterThan(0.6);
+    // 跟得上:推到最右,几帧之内就该走过九成。
+    expect(eyed[eyed.length - 1]!.value).toBeGreaterThan(0.9);
     // 叠加在通道值上,不是覆盖。
     expect(eyed[eyed.length - 1]!.added).toBe(true);
     // 腰不跟着鼠标转:身体参数一个都不写。
@@ -282,6 +310,44 @@ describe('播放器页面', () => {
     stubs.pump(25);
     const back = stubs.written.filter((entry) => entry.param === 'ParamEyeBallX').pop()!;
     expect(Math.abs(back.value)).toBeLessThan(0.1);
+
+    // ── 对话框:话发出去、她的话显示出来、位置跟着她但不越界 ─────────────────
+    expect(stubs.sockets.length).toBe(1);
+    expect(stubs.sockets[0]!.url).toContain('/chat');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(stubs.sockets[0]!.sent.join(' ')).toContain('"hello"'); // 连上先报名字
+
+    stubs.sockets[0]!.fire(JSON.stringify({ type: 'msg', from: '初音未来', text: '在的哦' }));
+    const log = node('chat-log');
+    expect(log.children).toHaveLength(1);
+    expect(log.children[0]!.className).toBe('line her');
+    expect(log.children[0]!.children[1]!.textContent).toBe('在的哦');
+
+    node('chat-input').value = '你好呀';
+    node('chat-form').fire('submit', { preventDefault: () => {} });
+    expect(stubs.sockets[0]!.sent.join(' ')).toContain('你好呀');
+    expect(node('chat-input').value).toBe('');
+
+    // 位置:她往右走,对话框跟着往右;放到极限就夹在可见区域内(右边给数值面板留位置)。
+    const leftOf = (): number => Number(String(node('chat').style.left).replace('px', ''));
+    const topOf = (): number => Number(String(node('chat').style.top).replace('px', ''));
+    node('zoom').value = '30' as never;
+    node('zoom').fire('input');
+    node('offset-x').value = '0' as never;
+    node('offset-x').fire('input');
+    const centred = leftOf();
+    node('offset-x').value = '300' as never;
+    node('offset-x').fire('input');
+    expect(leftOf()).toBeGreaterThan(centred);          // 跟着她走
+    node('offset-x').value = '400' as never;
+    node('offset-x').fire('input');
+    expect(leftOf()).toBeLessThanOrEqual(1600 - 316 - 340); // 面板与边距之后的位置
+    expect(leftOf()).toBeGreaterThanOrEqual(12);
+    // 纵向同理:把她推到最下面,对话框也不许出界。
+    node('offset-y').value = '400' as never;
+    node('offset-y').fire('input');
+    expect(topOf()).toBeGreaterThanOrEqual(12);
+    expect(topOf()).toBeLessThanOrEqual(900 - 220 - 12);
 
     // ── 表情按序号重放 ──────────────────────────────────────────────────────
     send({ channels: { MouthSmile: 0.5 }, expression: 'blush', expressionToken: 1, speaking: false });

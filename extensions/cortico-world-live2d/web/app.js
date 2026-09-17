@@ -23,10 +23,15 @@
    * 它还会写 `ParamBodyAngleX`,于是腰跟着鼠标转。这里自己算:按**指针位置**给偏移(看着她的脸
    * 就是看正前方)、指数逼近、只写眼睛和一点头,身体不动。
    */
-  var LOOK_TAU_SEC = 0.08;
+  var LOOK_TAU_SEC = 0.03;
   /** 眼神跟随的幅度:眼睛满偏,头只跟一点。 */
   var LOOK_EYE_RANGE = 1;
   var LOOK_HEAD_DEG = 6;
+
+  /** 对话框宽度、右侧数值面板要留出的位置、离屏幕边缘的最小距离。 */
+  var CHAT_WIDTH = 340;
+  var PANEL_RESERVE = 316;
+  var EDGE = 12;
 
   /** 情绪六维的中文名;与 `bots/miku/persona/emotion.ts` 的维度同键。 */
   var EMOTION_LABELS = {
@@ -53,6 +58,10 @@
     offsetYVal: document.getElementById('offset-y-val'),
     reset: document.getElementById('btn-reset'),
     save: document.getElementById('btn-save'),
+    chat: document.getElementById('chat'),
+    chatLog: document.getElementById('chat-log'),
+    chatForm: document.getElementById('chat-form'),
+    chatInput: document.getElementById('chat-input'),
   };
 
   function why(message) {
@@ -85,6 +94,9 @@
   var look = { x: 0, y: 0, targetX: 0, targetY: 0 };
   var lookParams = null;
   var lastTickMs = 0;
+  // 对话框:一条到本 World 的 WebSocket,以及它此刻的位置(避免每帧动布局)。
+  var chatSocket = null;
+  var chatPos = { left: -1, top: -1 };
   var barFill = {};
   var barNum = {};
   var channelRows = {};
@@ -121,6 +133,109 @@
     if (el.zoomVal) el.zoomVal.textContent = Math.round(view.zoom * 100) + '%';
     if (el.offsetXVal) el.offsetXVal.textContent = String(Math.round(view.x));
     if (el.offsetYVal) el.offsetYVal.textContent = String(Math.round(view.y));
+    placeChat();
+  }
+
+  /**
+   * 对话框的位置:跟着她,但**永远留在可见区域内**。
+   *
+   * 默认贴在她右边;右边放不下(或压到数值面板)就换到左边;两边都放不下就夹进剩余空间。
+   * 纵向按她的中心对齐,再夹进上下边距。只在实际位置变了的时候写样式,免得每帧动布局。
+   */
+  function placeChat() {
+    if (!el.chat || el.chat.className.indexOf('hidden') >= 0) return;
+    var width = CHAT_WIDTH;
+    var height = typeof el.chat.offsetHeight === 'number' && el.chat.offsetHeight > 0 ? el.chat.offsetHeight : 220;
+    var centerX = window.innerWidth / 2 + view.x;
+    var centerY = window.innerHeight / 2 + view.y;
+    var halfW = model ? (model.width * fitScale * view.zoom) / 2 : 0;
+    var minX = EDGE;
+    var maxX = Math.max(minX, window.innerWidth - PANEL_RESERVE - width);
+    var left = centerX + halfW + 16;
+    if (left > maxX) left = centerX - halfW - 16 - width;
+    left = Math.max(minX, Math.min(maxX, left));
+    var top = Math.max(EDGE, Math.min(Math.max(EDGE, window.innerHeight - height - EDGE), centerY - height / 2));
+    if (left === chatPos.left && top === chatPos.top) return;
+    chatPos = { left: left, top: top };
+    el.chat.style.left = Math.round(left) + 'px';
+    el.chat.style.top = Math.round(top) + 'px';
+  }
+
+  /** 对话框:页面自己连本 World 的 `/chat`,由它转到控制台的终端通道。 */
+  function bindChat() {
+    if (!el.chat) return;
+    if (el.chatForm) {
+      el.chatForm.addEventListener('submit', function (event) {
+        if (event && event.preventDefault) event.preventDefault();
+        var text = el.chatInput ? String(el.chatInput.value || '').trim() : '';
+        if (text === '') return;
+        sendChat(text);
+        if (el.chatInput) el.chatInput.value = '';
+      });
+    }
+    fetch('/pack/chat.json', { cache: 'no-store' })
+      .then(function (response) { return response.json(); })
+      .then(function (info) {
+        if (!info || !info.enabled) {
+          addChatLine('sys', '这一页的对话框没开:在 worlds.live2d.consoleUrl 里填控制台地址。');
+          return;
+        }
+        el.chat.className = '';
+        placeChat();
+        openChat();
+      })
+      .catch(function () { addChatLine('sys', '取 /pack/chat.json 失败,对话框没开。'); });
+  }
+
+  function openChat() {
+    var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    try {
+      chatSocket = new WebSocket(protocol + '//' + window.location.host + '/chat');
+    } catch (e) {
+      addChatLine('sys', '打不开对话框:' + e.message);
+      return;
+    }
+    chatSocket.onopen = function () { sendChat(null); };
+    chatSocket.onclose = function () { addChatLine('sys', '对话框断开了,刷新页面重连。'); };
+    chatSocket.onerror = function () { addChatLine('sys', '对话框连不上。'); };
+    chatSocket.onmessage = function (event) {
+      var payload;
+      try { payload = JSON.parse(event.data); } catch (e) { return; }
+      if (payload && typeof payload.text === 'string' && payload.text !== '') {
+        var from = typeof payload.from === 'string' ? payload.from : '';
+        var mine = from === '制作人' || from === '控制台';
+        addChatLine(mine ? 'me' : from === '' ? 'sys' : 'her', payload.text, from);
+        return;
+      }
+      if (payload && payload.type === 'sys' && typeof payload.text === 'string') addChatLine('sys', payload.text);
+    };
+  }
+
+  /** `text` 为 null 时只报上名字(连上就报一次)。 */
+  function sendChat(text) {
+    if (!chatSocket || chatSocket.readyState !== 1) return;
+    if (text === null) chatSocket.send(JSON.stringify({ type: 'hello', name: '制作人' }));
+    else chatSocket.send(JSON.stringify({ type: 'msg', text: text }));
+  }
+
+  function addChatLine(kind, text, who) {
+    if (!el.chatLog) return;
+    var line = document.createElement('div');
+    line.className = 'line ' + kind;
+    if (kind !== 'sys') {
+      var label = document.createElement('div');
+      label.className = 'who';
+      label.textContent = kind === 'her' ? (who || '她') : '你';
+      line.appendChild(label);
+    }
+    var say = document.createElement('div');
+    say.className = kind === 'sys' ? 'sys' : 'say';
+    say.textContent = text;
+    line.appendChild(say);
+    el.chatLog.appendChild(line);
+    if (typeof el.chatLog.scrollHeight === 'number') el.chatLog.scrollTop = el.chatLog.scrollHeight;
+    // 多一行就长高一点:位置要跟着重算,否则会顶出可见区域。
+    placeChat();
   }
 
   /** 面板上的取景控件:滑块与拖动都只改 `view`,改完立刻套到模型上。 */
@@ -321,6 +436,7 @@
     applyTransform();
     bindControls();
     bindLook();
+    bindChat();
     // Cubism 每帧会把参数复位成模型默认值,所以写参数只有一个正确的时刻:模型复位之后、
     // 更新之前(`beforeModelUpdate`)。自己的 rAF 与模型更新没有固定先后,写早了当帧就被抹掉。
     if (model.internalModel && typeof model.internalModel.on === 'function') {

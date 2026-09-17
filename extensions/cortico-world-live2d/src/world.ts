@@ -19,6 +19,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { WebSocket, WebSocketServer } from 'ws';
 import type { OutputTap, ToolDef, World, WorldConsoleDecl, WorldHost } from 'cortico/core/types.ts';
 import type { WorldContext } from 'cortico/world.ts';
 import { baselineChannels, EMOTION_BASELINE, type EmotionValues } from './baseline.ts';
@@ -48,6 +49,9 @@ const KEEPALIVE_MS = 15_000;
 const PORT_ATTEMPTS = 5;
 /** 措辞匹配只看最近这么多字:一句话很长时,前面的词不该一直压着后面的。 */
 const SPOKEN_WINDOW_CHARS = 160;
+/** 对话框在形象页上的路由,以及它在控制台那边对应的流式通道。 */
+const CHAT_PATH = '/chat';
+const TERMINAL_CHAT_PATH = '/ws/providers/world%3Aterminal/panels/chat';
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -77,6 +81,8 @@ export class Live2DWorld implements World {
   private pack: Pack | null = null;
   private performance: Performance | null = null;
   private server: Server | null = null;
+  /** 对话框的 WebSocket 服务;没配 `consoleUrl` 时为 null。 */
+  private chatServer: WebSocketServer | null = null;
   private pushTimer: NodeJS.Timeout | null = null;
   private readonly clients = new Set<ServerResponse>();
   private boundPort = 0;
@@ -333,8 +339,57 @@ export class Live2DWorld implements World {
 
     this.server = createServer((req, res) => this.handle(req, res));
     this.boundPort = await this.listen(this.cfg.port);
+    if (this.cfg.consoleUrl !== '') this.attachChat(this.server);
     this.pushTimer = setInterval(() => this.pushFrame(), PUSH_INTERVAL_MS);
     host.log.info(`形象页已启动 ${this.url()}`);
+  }
+
+  /**
+   * 把形象页的对话框接到控制台的终端通道上。
+   *
+   * 形象页只连本 World 的 `/chat`,由这里转一手:页面因此只有一个来源(18795),不必知道控制台
+   * 在哪个端口,也不必处理跨来源;控制台那边照旧是同一个对话通道,两边看到的是同一串消息。
+   * 上游连不上时给页面一句能读懂的话,而不是让它一直转圈。
+   */
+  private attachChat(server: Server): void {
+    const upstreamUrl = `${this.cfg.consoleUrl.replace(/\/+$/, '').replace(/^http/, 'ws')}${TERMINAL_CHAT_PATH}`;
+    const wss = new WebSocketServer({ noServer: true });
+    this.chatServer = wss;
+    server.on('upgrade', (req, socket, head) => {
+      const path = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+      if (path !== CHAT_PATH) {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (client) => {
+        const upstream = new WebSocket(upstreamUrl);
+        const queued: string[] = [];
+        let upstreamFailed = false;
+        upstream.on('open', () => {
+          for (const message of queued) upstream.send(message);
+          queued.length = 0;
+        });
+        upstream.on('message', (data) => {
+          try { client.send(data.toString()); } catch { /* 页面已经走了 */ }
+        });
+        upstream.on('error', () => {
+          upstreamFailed = true;
+          this.host?.log.warn('对话框连不上控制台', { url: upstreamUrl });
+          try {
+            client.send(JSON.stringify({ type: 'sys', text: '连不上控制台:检查 worlds.live2d.consoleUrl' }));
+          } catch { /* 同上 */ }
+        });
+        upstream.on('close', () => {
+          if (!upstreamFailed) { try { client.close(1000, 'console closed'); } catch { /* 同上 */ } }
+        });
+        client.on('message', (data) => {
+          const text = data.toString();
+          if (upstream.readyState === WebSocket.OPEN) upstream.send(text);
+          else if (!upstreamFailed) queued.push(text);
+        });
+        client.on('close', () => { try { upstream.close(); } catch { /* 同上 */ } });
+      });
+    });
   }
 
   async stop(): Promise<void> {
@@ -344,6 +399,14 @@ export class Live2DWorld implements World {
       try { client.end(); } catch { /* 断开即可 */ }
     }
     this.clients.clear();
+    const chat = this.chatServer;
+    this.chatServer = null;
+    if (chat) {
+      for (const client of chat.clients) {
+        try { client.close(1001, 'avatar stopping'); } catch { /* 断开即可 */ }
+      }
+      await new Promise<void>((done) => chat.close(() => done()));
+    }
     const server = this.server;
     this.server = null;
     this.boundPort = 0;
@@ -391,6 +454,10 @@ export class Live2DWorld implements World {
       }
       if (url.pathname === '/pack/overrides.json') {
         return this.sendJson(res, this.paramOverrides);
+      }
+      if (url.pathname === '/pack/chat.json') {
+        // 页面据此决定要不要显示对话框:没配控制台地址就是没有这一块。
+        return this.sendJson(res, { enabled: this.cfg.consoleUrl !== '' });
       }
       if (url.pathname === '/pack/expressions.json') {
         const current = this.syncExpression(Date.now());
@@ -604,7 +671,9 @@ export class Live2DWorld implements World {
             done();
           });
         });
-        return attempt;
+        // 配置写 0 时端口由系统挑:报实际绑上的那个,别把 0 传出去。
+        const address = this.server!.address();
+        return address !== null && typeof address === 'object' ? address.port : attempt;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code !== 'EADDRINUSE') throw error;

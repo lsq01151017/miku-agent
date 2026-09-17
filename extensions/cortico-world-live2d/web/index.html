@@ -56,12 +56,38 @@
   button:hover { background: #24343c; }
   #channels { font: 11px/1.5 ui-monospace, monospace; color: #b7ccd4; }
   #channels div { display: flex; justify-content: space-between; }
+
+  /* 对话框:跟着她走,但永远留在可见区域里。位置由脚本算,这里只给长相。 */
+  #chat {
+    position: fixed; left: 0; top: 0; width: 340px; max-height: 46vh;
+    display: flex; flex-direction: column; border-radius: 10px;
+    background: #16202699; border: 1px solid #24343c; backdrop-filter: blur(3px);
+    font: 13px/1.6 system-ui, sans-serif; color: #dff6f2; overflow: hidden;
+  }
+  #chat.hidden { display: none; }
+  #chat-log { flex: 1; overflow-y: auto; padding: 10px 12px; min-height: 0; }
+  #chat-log .line { margin-bottom: 8px; }
+  #chat-log .who { font-size: 11px; color: #7d909a; }
+  #chat-log .say { white-space: pre-wrap; word-break: break-word; }
+  #chat-log .her .say { color: #a9f0e2; }
+  #chat-log .sys { font-size: 11px; color: #ffd9a8; white-space: pre-wrap; }
+  #chat form { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid #24343c; }
+  #chat input {
+    flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid #2c4048;
+    background: #101a1f; color: #dff6f2; font: 13px/1.4 system-ui, sans-serif;
+  }
+  #chat input:focus { outline: 1px solid #39c5bb; }
+  #chat button {
+    padding: 6px 12px; border-radius: 6px; border: 1px solid #2c4048; background: #1d2a30;
+    color: #cfe; font: 13px/1.4 system-ui, sans-serif; cursor: pointer;
+  }
+  #chat button:hover { background: #24343c; }
 </style>
 </head>
 <body>
 <canvas id="stage"></canvas>
 <div id="conn">连接中…</div>
-<div id="talk">这一页只负责她的身体。<a href="http://127.0.0.1:18790/" target="_blank">在控制台的终端页跟她说话</a>,身体会跟着动。拖动画面可以挪动她。</div>
+<div id="talk">这一页是她的身体和对话框。可以在下面直接跟她说话;<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话,消息两边都看得到。拖动画面可以挪动她。</div>
 <div id="why"></div>
 
 <div id="panel">
@@ -91,6 +117,15 @@
     <div class="kv"><span>通道</span><span class="muted">此刻的值</span></div>
     <div id="channels"></div>
   </section>
+</div>
+
+<!-- 对话框:跟着她走,永远留在可见区域里;位置由脚本算。 -->
+<div id="chat" class="hidden">
+  <div id="chat-log"></div>
+  <form id="chat-form" autocomplete="off">
+    <input id="chat-input" type="text" placeholder="对她说点什么…" aria-label="对她说点什么">
+    <button type="submit">说</button>
+  </form>
 </div>
 
 <!-- 三个库由本扩展的渲染服务从配置的播放器库目录转发;应用脚本在 /app.js。 -->
