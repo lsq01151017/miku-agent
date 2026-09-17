@@ -45,6 +45,7 @@
 
   var el = {
     canvas: document.getElementById('stage'),
+    hit: document.getElementById('hit'),
     conn: document.getElementById('conn'),
     why: document.getElementById('why'),
     mood: document.getElementById('mood'),
@@ -373,23 +374,20 @@
       el.save.addEventListener('click', function () { saveView(); });
     }
 
-    // 画面里直接拖:一次拖动的位移就是取景偏移,松手即定。
-    if (el.canvas && el.canvas.addEventListener) {
-      el.canvas.addEventListener('pointerdown', function (event) {
-        // 挡掉原生拖拽:不然浏览器会拖着一份画布副本跟鼠标走,看着就像多了一个模型。
+    // 指针全落在覆层上:画布自己不是事件目标,浏览器拖不出它的副本。
+    var dragSurface = el.hit || el.canvas;
+    if (dragSurface && dragSurface.addEventListener) {
+      dragSurface.addEventListener('pointerdown', function (event) {
         if (event && event.preventDefault) event.preventDefault();
         dragging = { x: event.clientX, y: event.clientY, fromX: view.x, fromY: view.y };
-        if (el.canvas.className.indexOf('dragging') < 0) el.canvas.className += ' dragging';
-        if (el.canvas.setPointerCapture) { try { el.canvas.setPointerCapture(event.pointerId); } catch (e) { /* 可选 */ } }
+        if (dragSurface.className.indexOf('dragging') < 0) dragSurface.className += ' dragging';
+        if (dragSurface.setPointerCapture) { try { dragSurface.setPointerCapture(event.pointerId); } catch (e) { /* 可选 */ } }
       });
-      el.canvas.addEventListener('dragstart', function (event) {
-        if (event && event.preventDefault) event.preventDefault();
-      });
-      el.canvas.addEventListener('pointermove', function (event) {
+      dragSurface.addEventListener('pointermove', function (event) {
         if (!dragging) return;
         // 松手时鼠标可能在窗口外(pointerup 收不到):这时按键已经不按了,直接当成松手,
         // 否则她会跟着鼠标一路滑出画面——看着就是"模型突然消失"。
-        if (event.buttons === 0) { dragging = null; el.canvas.className = el.canvas.className.replace(' dragging', ''); return; }
+        if (event.buttons === 0) { dragging = null; dragSurface.className = dragSurface.className.replace(' dragging', ''); return; }
         view.x = dragging.fromX + (event.clientX - dragging.x);
         view.y = dragging.fromY + (event.clientY - dragging.y);
         applyTransform();
@@ -397,16 +395,24 @@
       var release = function () {
         if (!dragging) return;
         dragging = null;
-        el.canvas.className = el.canvas.className.replace(' dragging', '');
+        dragSurface.className = dragSurface.className.replace(' dragging', '');
         saveView();
       };
-      el.canvas.addEventListener('pointerup', release);
-      el.canvas.addEventListener('pointercancel', release);
+      dragSurface.addEventListener('pointerup', release);
+      dragSurface.addEventListener('pointercancel', release);
       // 指针在窗口外松开、或切走标签页时也要收尾。
       if (window.addEventListener) {
         window.addEventListener('pointerup', release);
         window.addEventListener('blur', release);
       }
+      dragSurface.addEventListener('dragstart', function (event) {
+        if (event && event.preventDefault) event.preventDefault();
+      });
+    }
+    if (document.addEventListener) {
+      document.addEventListener('dragstart', function (event) {
+        if (event && event.preventDefault) event.preventDefault();
+      }, true);
     }
   }
 

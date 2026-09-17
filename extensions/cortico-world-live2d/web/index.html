@@ -15,9 +15,13 @@
     --glass-accent: #39c5bb;
   }
   html, body { margin: 0; height: 100%; background: #10161a; overflow: hidden; }
-  /* 画布不许被浏览器当图片拖走:原生拖拽会跟着鼠标浮出一份半透明副本,看着就像出现了两个模型。 */
-  canvas { display: block; cursor: grab; -webkit-user-drag: none; user-select: none; touch-action: none; }
-  canvas.dragging { cursor: grabbing; }
+  /* 指针落在这层透明覆层上,画布自己不接指针:浏览器手里没有能拖的东西,拖动就不会拖出一份跟着鼠标的副本。 */
+  canvas { display: block; -webkit-user-drag: none; user-select: none; touch-action: none; }
+  #hit {
+    position: fixed; inset: 0; cursor: grab; touch-action: none;
+    -webkit-user-drag: none; user-select: none;
+  }
+  #hit.dragging { cursor: grabbing; }
 
   .glass {
     background: var(--glass-bg);
@@ -33,7 +37,7 @@
   }
   #conn.on { color: #8ff0dc; }
   #why {
-    position: fixed; left: 12px; bottom: 96px; right: 320px; padding: 8px 12px; border-radius: 10px;
+    position: fixed; left: 12px; bottom: 132px; right: 320px; padding: 8px 12px; border-radius: 10px;
     font: 12px/1.7 ui-monospace, monospace; color: #ffd9d9; display: none; white-space: pre-wrap;
   }
   #talk {
@@ -42,14 +46,19 @@
   }
   #talk a { color: var(--glass-accent); }
 
-  /* 她的回答:浮在模型上方的一条扁字幕。比输入区略长,衬底回到能看清字的那一版。 */
+  /* 她的话和我发的话同住底部一栏:字幕在上、输入区在下,顺序固定,字号不变,行间压到最小。 */
+  #bottom {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    pointer-events: none;
+  }
   #subtitle {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: 68px;
-    width: min(1140px, calc(100vw - 28px)); padding: 1px 16px; border-radius: 6px;
+    position: relative;
+    width: min(1140px, calc(100vw - 28px)); padding: 1px 14px; border-radius: 6px;
     border: 0; background: rgba(10, 16, 20, 0.34);
     -webkit-backdrop-filter: blur(8px);
     backdrop-filter: blur(8px);
-    color: var(--glass-ink); font: 15px/1.32 system-ui, sans-serif;
+    color: var(--glass-ink); font: 15px/1.12 system-ui, sans-serif;
     text-align: center; white-space: pre-wrap; word-break: break-word;
     opacity: 0; transition: opacity .18s ease;
     pointer-events: none;
@@ -58,7 +67,7 @@
 
   /* 底部输入区:扁平的;只留最近一句,其余收起,要用时展开。 */
   #composer {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px;
+    position: relative; pointer-events: auto;
     width: min(1080px, calc(100vw - 40px)); padding: 7px 10px; border-radius: 14px;
     color: var(--glass-ink); font: 14px/1.5 system-ui, sans-serif;
   }
@@ -124,14 +133,15 @@
 </head>
 <body>
 <canvas id="stage" draggable="false"></canvas>
+<div id="hit"></div>
 <div id="conn" class="glass">连接中…</div>
 <div id="talk" class="glass">这一页是她的身体。<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话。拖动画面可以挪动她。</div>
 <div id="why"></div>
 
-<!-- 她的回答:一条扁字幕,浮在模型上方。 -->
+<!-- 底部一栏:她的字幕在上,我发过的话与输入框在下。 -->
+<div id="bottom">
 <div id="subtitle" class="glass"></div>
 
-<!-- 底部:我发过的话(扁平、无滚动条)+ 输入框。 -->
 <div id="composer" class="glass hidden">
   <div id="mine"></div>
   <form id="composer-form" autocomplete="off">
@@ -139,6 +149,7 @@
     <button id="btn-history" type="button" title="展开我发过的话">历史</button>
     <button type="submit">说</button>
   </form>
+</div>
 </div>
 
 <div id="panel" class="glass">

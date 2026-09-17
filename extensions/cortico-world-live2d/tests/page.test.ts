@@ -286,11 +286,16 @@ describe('播放器页面', () => {
     node('offset-y').fire('input');
     expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800 + 40, y: 450 - 25 });
 
-    // 直接拖画面:拖动位移就是取景偏移,松手即存。
+    // 画布不接指针:拖它不会有任何位移。
     node('stage').fire('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 });
     node('stage').fire('pointermove', { clientX: 130, clientY: 90, pointerId: 1 });
+    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800 + 40, y: 450 - 25 });
+
+    // 拖覆层:拖动位移就是取景偏移,松手即存。
+    node('hit').fire('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 });
+    node('hit').fire('pointermove', { clientX: 130, clientY: 90, pointerId: 1 });
     expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800 + 70, y: 450 - 35 });
-    node('stage').fire('pointerup', {});
+    node('hit').fire('pointerup', {});
     expect(stubs.stored.length).toBeGreaterThan(0);
     expect(JSON.parse(stubs.stored[stubs.stored.length - 1]!)).toMatchObject({ zoom: 1.5, x: 70, y: -35 });
 
