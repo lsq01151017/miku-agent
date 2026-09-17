@@ -28,10 +28,11 @@
   var LOOK_EYE_RANGE = 1;
   var LOOK_HEAD_DEG = 6;
 
-  /** 对话框宽度、右侧数值面板要留出的位置、离屏幕边缘的最小距离。 */
-  var CHAT_WIDTH = 340;
-  var PANEL_RESERVE = 316;
-  var EDGE = 12;
+  /** 底部输入区只留最近几条我说过的话;字幕在她说完之后留一会儿再淡掉。 */
+  var MINE_LINES = 3;
+  var SUBTITLE_MS = 9000;
+  var SYSTEM_SUBTITLE_MS = 6000;
+  var AGENT_CHAT_PATH = '/agent/chat';
 
   /** 情绪六维的中文名;与 `bots/miku/persona/emotion.ts` 的维度同键。 */
   var EMOTION_LABELS = {
@@ -58,10 +59,11 @@
     offsetYVal: document.getElementById('offset-y-val'),
     reset: document.getElementById('btn-reset'),
     save: document.getElementById('btn-save'),
-    chat: document.getElementById('chat'),
-    chatLog: document.getElementById('chat-log'),
-    chatForm: document.getElementById('chat-form'),
-    chatInput: document.getElementById('chat-input'),
+    subtitle: document.getElementById('subtitle'),
+    composer: document.getElementById('composer'),
+    mine: document.getElementById('mine'),
+    composerForm: document.getElementById('composer-form'),
+    composerInput: document.getElementById('composer-input'),
   };
 
   function why(message) {
@@ -94,9 +96,11 @@
   var look = { x: 0, y: 0, targetX: 0, targetY: 0 };
   var lookParams = null;
   var lastTickMs = 0;
-  // 对话框:一条到本 World 的 WebSocket,以及它此刻的位置(避免每帧动布局)。
+  // 对话:走控制台那条 WebSocket,或者走外部 Agent;字幕文本与它的淡出计时在这里。
   var chatSocket = null;
-  var chatPos = { left: -1, top: -1 };
+  var useAgent = false;
+  var subtitleText = '';
+  var subtitleTimer = null;
   var barFill = {};
   var barNum = {};
   var channelRows = {};
@@ -126,6 +130,7 @@
     applyTransform();
   }
 
+  /** 缩放与位置套到模型上;取景只影响画面,不回写模型。 */
   function applyTransform() {
     if (!model) return;
     model.scale.set(fitScale * view.zoom);
@@ -133,81 +138,107 @@
     if (el.zoomVal) el.zoomVal.textContent = Math.round(view.zoom * 100) + '%';
     if (el.offsetXVal) el.offsetXVal.textContent = String(Math.round(view.x));
     if (el.offsetYVal) el.offsetYVal.textContent = String(Math.round(view.y));
-    placeChat();
   }
 
   /**
-   * 对话框的位置:跟着她,但**永远留在可见区域内**。
+   * 输入区与字幕。
    *
-   * 默认贴在她右边;右边放不下(或压到数值面板)就换到左边;两边都放不下就夹进剩余空间。
-   * 纵向按她的中心对齐,再夹进上下边距。只在实际位置变了的时候写样式,免得每帧动布局。
+   * 按操作员看到的来分:她的话是**字幕**(浮在模型上方的一条扁条,一段一段替换),我发过的话
+   * 只在底部输入区里列着(扁平的,没有滚动条)。两条路都能接:
+   *   - 配了 `agentUrl`:输入 `POST` 本 World 的 `/agent/chat`,由 World 转给外部 Agent,把它
+   *     吐回来的增量流回来当字幕(同一段文本也驱动她的动作);
+   *   - 只配了 `consoleUrl`:输入走 `/chat` 这条 WebSocket,与控制台的终端页是同一个对话。
    */
-  function placeChat() {
-    if (!el.chat || el.chat.className.indexOf('hidden') >= 0) return;
-    var width = CHAT_WIDTH;
-    var height = typeof el.chat.offsetHeight === 'number' && el.chat.offsetHeight > 0 ? el.chat.offsetHeight : 220;
-    var centerX = window.innerWidth / 2 + view.x;
-    var centerY = window.innerHeight / 2 + view.y;
-    var halfW = model ? (model.width * fitScale * view.zoom) / 2 : 0;
-    var minX = EDGE;
-    var maxX = Math.max(minX, window.innerWidth - PANEL_RESERVE - width);
-    var left = centerX + halfW + 16;
-    if (left > maxX) left = centerX - halfW - 16 - width;
-    left = Math.max(minX, Math.min(maxX, left));
-    var top = Math.max(EDGE, Math.min(Math.max(EDGE, window.innerHeight - height - EDGE), centerY - height / 2));
-    if (left === chatPos.left && top === chatPos.top) return;
-    chatPos = { left: left, top: top };
-    el.chat.style.left = Math.round(left) + 'px';
-    el.chat.style.top = Math.round(top) + 'px';
-  }
-
-  /** 对话框:页面自己连本 World 的 `/chat`,由它转到控制台的终端通道。 */
-  function bindChat() {
-    if (!el.chat) return;
-    if (el.chatForm) {
-      el.chatForm.addEventListener('submit', function (event) {
+  function bindComposer() {
+    if (!el.composer) return;
+    if (el.composerForm) {
+      el.composerForm.addEventListener('submit', function (event) {
         if (event && event.preventDefault) event.preventDefault();
-        var text = el.chatInput ? String(el.chatInput.value || '').trim() : '';
+        var text = el.composerInput ? String(el.composerInput.value || '').trim() : '';
         if (text === '') return;
-        sendChat(text);
-        if (el.chatInput) el.chatInput.value = '';
+        if (el.composerInput) el.composerInput.value = '';
+        say(text);
       });
     }
     fetch('/pack/chat.json', { cache: 'no-store' })
       .then(function (response) { return response.json(); })
       .then(function (info) {
-        if (!info || !info.enabled) {
-          addChatLine('sys', '这一页的对话框没开:在 worlds.live2d.consoleUrl 里填控制台地址。');
+        useAgent = Boolean(info && info.agent);
+        if (!info || (!info.enabled && !info.agent)) {
+          showSubtitle('这一页没有接话的地方:在 worlds.live2d.consoleUrl 或 agentUrl 里填一个地址。', true);
           return;
         }
-        el.chat.className = '';
-        placeChat();
-        openChat();
+        el.composer.className = 'glass';
+        if (!useAgent) openChat();
       })
-      .catch(function () { addChatLine('sys', '取 /pack/chat.json 失败,对话框没开。'); });
+      .catch(function () { showSubtitle('取 /pack/chat.json 失败,输入区没开。', true); });
   }
+
+  /** 我说了一句话:记在底部,再按接的是哪条路发出去。 */
+  function say(text) {
+    addMine(text);
+    if (useAgent) sendToAgent(text);
+    else sendChat(text);
+  }
+
+  /** 我发过的话:只留最近几条,一行一条,超出就省略号——不出现滚动条。 */
+  function addMine(text) {
+    if (!el.mine) return;
+    var line = document.createElement('div');
+    line.textContent = text;
+    el.mine.appendChild(line);
+    while (el.mine.children.length > MINE_LINES) el.mine.removeChild(el.mine.children[0]);
+  }
+
+  /** 字幕换一整段(终端通道给的是整句)。 */
+  function showSubtitle(text, system) {
+    subtitleText = typeof text === 'string' ? text : '';
+    renderSubtitle(system ? SYSTEM_SUBTITLE_MS : SUBTITLE_MS);
+  }
+
+  /** 字幕接一段增量(外部 Agent 是流着吐的)。 */
+  function appendSubtitle(delta) {
+    subtitleText += delta;
+    renderSubtitle(SUBTITLE_MS);
+  }
+
+  function renderSubtitle(holdMs) {
+    if (!el.subtitle) return;
+    el.subtitle.textContent = subtitleText;
+    el.subtitle.className = subtitleText === '' ? 'glass' : 'glass on';
+    if (subtitleTimer !== null) clearTimeout(subtitleTimer);
+    subtitleTimer = setTimeout(function () {
+      subtitleTimer = null;
+      // 她还在说就先留着;说完了这一条自己淡掉。
+      if (!speaking) el.subtitle.className = 'glass';
+    }, holdMs);
+  }
+
+  /** 新的一段开始时把上一条字幕清掉:她的下一句不是接在上一句后面。 */
+  function beginSubtitle() { subtitleText = ''; }
 
   function openChat() {
     var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     try {
       chatSocket = new WebSocket(protocol + '//' + window.location.host + '/chat');
     } catch (e) {
-      addChatLine('sys', '打不开对话框:' + e.message);
+      showSubtitle('打不开对话通道:' + e.message, true);
       return;
     }
     chatSocket.onopen = function () { sendChat(null); };
-    chatSocket.onclose = function () { addChatLine('sys', '对话框断开了,刷新页面重连。'); };
-    chatSocket.onerror = function () { addChatLine('sys', '对话框连不上。'); };
+    chatSocket.onclose = function () { showSubtitle('对话通道断开了,刷新页面重连。', true); };
+    chatSocket.onerror = function () { showSubtitle('对话通道连不上。', true); };
     chatSocket.onmessage = function (event) {
       var payload;
       try { payload = JSON.parse(event.data); } catch (e) { return; }
-      if (payload && typeof payload.text === 'string' && payload.text !== '') {
-        var from = typeof payload.from === 'string' ? payload.from : '';
-        var mine = from === '制作人' || from === '控制台';
-        addChatLine(mine ? 'me' : from === '' ? 'sys' : 'her', payload.text, from);
-        return;
-      }
-      if (payload && payload.type === 'sys' && typeof payload.text === 'string') addChatLine('sys', payload.text);
+      if (!payload) return;
+      if (payload.type === 'sys' && typeof payload.text === 'string') { showSubtitle(payload.text, true); return; }
+      if (typeof payload.text !== 'string' || payload.text === '') return;
+      var from = typeof payload.from === 'string' ? payload.from : '';
+      if (from === '制作人' || from === '控制台') return;   // 我自己的话已经记在输入区了
+      if (from === '') { showSubtitle(payload.text, true); return; }
+      if (!speaking) beginSubtitle();
+      showSubtitle(payload.text);
     };
   }
 
@@ -218,26 +249,53 @@
     else chatSocket.send(JSON.stringify({ type: 'msg', text: text }));
   }
 
-  function addChatLine(kind, text, who) {
-    if (!el.chatLog) return;
-    var line = document.createElement('div');
-    line.className = 'line ' + kind;
-    if (kind !== 'sys') {
-      var label = document.createElement('div');
-      label.className = 'who';
-      label.textContent = kind === 'her' ? (who || '她') : '你';
-      line.appendChild(label);
-    }
-    var say = document.createElement('div');
-    say.className = kind === 'sys' ? 'sys' : 'say';
-    say.textContent = text;
-    line.appendChild(say);
-    el.chatLog.appendChild(line);
-    if (typeof el.chatLog.scrollHeight === 'number') el.chatLog.scrollTop = el.chatLog.scrollHeight;
-    // 多一行就长高一点:位置要跟着重算,否则会顶出可见区域。
-    placeChat();
+  /** 外部 Agent:一句话 POST 到本 World,它转给 Agent 并把返回的增量流回来。 */
+  function sendToAgent(text) {
+    beginSubtitle();
+    fetch(AGENT_CHAT_PATH, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    }).then(function (response) {
+      if (!response.body || typeof response.body.getReader !== 'function') return response.text();
+      var reader = response.body.getReader();
+      var decoder = new TextDecoder();
+      var buffer = '';
+      var pump = function () {
+        return reader.read().then(function (result) {
+          if (result.done) return;
+          buffer += decoder.decode(result.value, { stream: true });
+          var at;
+          while ((at = buffer.indexOf('\n\n')) >= 0) {
+            var block = buffer.slice(0, at);
+            buffer = buffer.slice(at + 2);
+            block.split('\n').forEach(function (line) {
+              if (line.indexOf('data:') !== 0) return;
+              handleAgentChunk(line.slice(5).trim());
+            });
+          }
+          return pump();
+        });
+      };
+      return pump();
+    }).catch(function (error) {
+      showSubtitle('送不出去:' + error.message, true);
+    });
   }
 
+  function handleAgentChunk(payload) {
+    if (payload === '' || payload === '[DONE]') return;
+    var text = payload;
+    if (payload.charAt(0) === '{') {
+      try {
+        var parsed = JSON.parse(payload);
+        if (typeof parsed.error === 'string') { showSubtitle(parsed.error, true); return; }
+        if (parsed.done) return;
+        text = typeof parsed.delta === 'string' ? parsed.delta : '';
+      } catch (e) { /* 不是 JSON 就整段当文本 */ }
+    }
+    if (text !== '') appendSubtitle(text);
+  }
   /** 面板上的取景控件:滑块与拖动都只改 `view`,改完立刻套到模型上。 */
   function bindControls() {
     if (el.zoom) {
@@ -436,7 +494,7 @@
     applyTransform();
     bindControls();
     bindLook();
-    bindChat();
+    bindComposer();
     // Cubism 每帧会把参数复位成模型默认值,所以写参数只有一个正确的时刻:模型复位之后、
     // 更新之前(`beforeModelUpdate`)。自己的 rAF 与模型更新没有固定先后,写早了当帧就被抹掉。
     if (model.internalModel && typeof model.internalModel.on === 'function') {
@@ -554,7 +612,11 @@
       var payload = JSON.parse(event.data);
       target = payload.channels || {};
       var nowSpeaking = Boolean(payload.speaking);
-      if (nowSpeaking && !speaking) speakStart = performance.now();
+      if (nowSpeaking && !speaking) {
+        speakStart = performance.now();
+        // 新的一段:上一句字幕清掉,等这一句。
+        if (!useAgent) beginSubtitle();
+      }
       speaking = nowSpeaking;
       applyExpression(payload.expression || null, payload.expressionToken);
       showState(payload);

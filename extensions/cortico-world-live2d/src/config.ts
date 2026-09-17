@@ -62,10 +62,18 @@ export interface Live2DConfigSection extends WorldSection {
   /**
    * 控制台地址,例如 `http://127.0.0.1:18790`。
    *
-   * 填了它,形象页就能挂一个对话框:页面连本 World 的 `/chat`,由这里转到控制台的终端通道。
-   * 页面因此只有一个来源,不必知道控制台在哪个端口。留空就是没有对话框。
+   * 填了它,形象页的输入就能转到控制台的终端通道:页面连本 World 的 `/chat`,由这里转一手。
+   * 页面因此只有一个来源,不必知道控制台在哪个端口。留空就没有这一路。
    */
   consoleUrl: string;
+  /**
+   * 外部 Agent 的地址,例如 `http://127.0.0.1:8790`。
+   *
+   * 填了它,形象页的输入就送到那个 Agent,它吐回来的文本当字幕显示,同时驱动她的台词片段、
+   * 表情、口型与说话时长。约定:`POST <agentUrl>/agent/chat` JSON `{ message }`;回包是 SSE
+   * (`data:` 每段一段文本或 JSON)也行,一次性 JSON/纯文本也行。留空就只走控制台那一路。
+   */
+  agentUrl: string;
 }
 
 export const LIVE2D_DEFAULTS: Live2DConfigSection = {
@@ -85,6 +93,7 @@ export const LIVE2D_DEFAULTS: Live2DConfigSection = {
   speechMsPerChar: 130,
   idleAmount: 1,
   consoleUrl: '',
+  agentUrl: '',
 };
 
 export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
@@ -191,8 +200,14 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
       'consoleUrl': {
         type: 'string',
         title: '控制台地址',
-        description: '例如 http://127.0.0.1:18790。填了它,形象页的对话框就把话转到控制台的终端通道;'
-          + '留空则形象页没有对话框。',
+        description: '例如 http://127.0.0.1:18790。填了它,形象页的输入就转到控制台的终端通道;'
+          + '留空则不走这一路。',
+      },
+      'agentUrl': {
+        type: 'string',
+        title: '外部 Agent 地址',
+        description: '例如 http://127.0.0.1:8790。填了它,形象页的输入就送给这个 Agent,'
+          + '它吐回来的文本当字幕显示并驱动她的动作。约定:POST <地址>/agent/chat,JSON { message }。',
       },
     },
   },

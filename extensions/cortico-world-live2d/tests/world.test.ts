@@ -1,8 +1,9 @@
-/**
+﻿/**
  * Live2D World:真实端口、真实 HTTP 与 SSE,只有 WebSocket 之外的浏览器端是假的。
  * 模型与播放器库用临时目录里的替身文件——这里验的是路由、推流与驱动,不是 Cubism 渲染。
  */
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
@@ -375,7 +376,7 @@ describe('台词即演出指令', () => {
 describe('对话框', () => {
   it('没配控制台地址时这一块就是关的', async () => {
     const live = await start();
-    expect(await (await fetch(url('/pack/chat.json'))).json()).toEqual({ enabled: false });
+    expect(await (await fetch(url('/pack/chat.json'))).json()).toMatchObject({ enabled: false, agent: false });
   });
 
   it('配了控制台地址:页面的话转到终端通道,她的话回到页面', async () => {
@@ -394,7 +395,7 @@ describe('对话框', () => {
     let client: WebSocket | null = null;
     try {
       const live = await start({ consoleUrl: `http://127.0.0.1:${consolePort}` });
-      expect(await (await fetch(url('/pack/chat.json'))).json()).toEqual({ enabled: true });
+      expect(await (await fetch(url('/pack/chat.json'))).json()).toMatchObject({ enabled: true });
 
       client = new WebSocket(`ws://127.0.0.1:${port}/chat`);
       const frames: string[] = [];
@@ -420,6 +421,64 @@ describe('对话框', () => {
     for (let i = 0; i < 40 && frames.length === 0; i++) await new Promise((r) => setTimeout(r, 25));
     expect(frames.join(' ')).toContain('连不上控制台');
     client.close();
+  });
+});
+
+describe('外部 Agent 接入', () => {
+  it('没配 Agent 时明确回绝,不装作能接', async () => {
+    await start();
+    const response = await fetch(url('/agent/chat'), { method: 'POST', body: '{"message":"你好"}' });
+    expect(response.status).toBe(409);
+  });
+
+  it('我的一句话送到 Agent,它吐的文本流回来当字幕并驱动她的身体', async () => {
+    // 假 Agent:一个真的 HTTP 服务端,收到什么就记下来,然后吐两段 SSE。
+    const seen: string[] = [];
+    const agentServer = createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk.toString(); });
+      req.on('end', () => {
+        seen.push(body);
+        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8' });
+        res.write('data: {"delta":"你好"}\n\n');
+        res.write('data: {"delta":"呀"}\n\n');
+        res.write('data: [DONE]\n\n');
+        res.end();
+      });
+    });
+    await new Promise<void>((done) => agentServer.listen(0, '127.0.0.1', () => done()));
+    const agentPort = (agentServer.address() as AddressInfo).port;
+    try {
+      const live = await start({ agentUrl: `http://127.0.0.1:${agentPort}` });
+      expect(await (await fetch(url('/pack/chat.json'))).json()).toMatchObject({ agent: true });
+
+      const response = await fetch(url('/agent/chat'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: '你好呀' }),
+      });
+      expect(response.headers.get('content-type')).toContain('text/event-stream');
+      const streamed = await response.text();
+      expect(streamed).toContain('"delta":"你好"');
+      expect(streamed).toContain('"delta":"呀"');
+      expect(seen.join(' ')).toContain('你好呀'); // 我的原话送到了 Agent
+
+      // 她"说"了这两段:推流里开始有说话标志,并有对应的动作(起音)。
+      const controller = new AbortController();
+      const frame = await firstFrame(controller.signal) as { speaking: boolean; clips: string[] };
+      controller.abort();
+      expect(frame.speaking).toBe(true);
+      expect(frame.clips.length).toBeGreaterThan(0);
+    } finally {
+      await new Promise<void>((done) => agentServer.close(() => done()));
+    }
+  });
+
+  it('Agent 不在时给页面一句能读懂的话', async () => {
+    const live = await start({ agentUrl: 'http://127.0.0.1:1' });
+    const response = await fetch(url('/agent/chat'), { method: 'POST', body: '{"message":"你好"}' });
+    const streamed = await response.text();
+    expect(streamed).toContain('连不上外部 Agent');
   });
 });
 

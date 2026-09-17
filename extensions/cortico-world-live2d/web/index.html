@@ -5,92 +5,131 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>初音未来 · Live2D</title>
 <style>
+  :root {
+    /* 磨砂玻璃:半透明底 + 背景模糊 + 一道细边。面板、字幕、输入区、按键都用这一套。 */
+    --glass-bg: rgba(22, 32, 38, 0.42);
+    --glass-bg-strong: rgba(22, 32, 38, 0.58);
+    --glass-edge: rgba(255, 255, 255, 0.14);
+    --glass-ink: #e6fbf6;
+    --glass-dim: #a8c2c9;
+    --glass-accent: #39c5bb;
+  }
   html, body { margin: 0; height: 100%; background: #10161a; overflow: hidden; }
   canvas { display: block; cursor: grab; }
   canvas.dragging { cursor: grabbing; }
+
+  .glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-edge);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+  }
+
   #conn {
     position: fixed; left: 12px; top: 12px; padding: 4px 10px; border-radius: 999px;
-    font: 12px/1.6 system-ui, sans-serif; color: #cfe; background: #1d2a30; opacity: .85;
+    font: 12px/1.6 system-ui, sans-serif; color: var(--glass-ink);
   }
-  #conn.on { background: #17403a; color: #8ff0dc; }
+  #conn.on { color: #8ff0dc; }
   #why {
-    position: fixed; left: 12px; bottom: 12px; right: 320px; padding: 8px 12px; border-radius: 8px;
-    font: 12px/1.7 ui-monospace, monospace; color: #ffd9d9; background: #40191d; display: none;
-    white-space: pre-wrap;
+    position: fixed; left: 12px; bottom: 96px; right: 320px; padding: 8px 12px; border-radius: 10px;
+    font: 12px/1.7 ui-monospace, monospace; color: #ffd9d9; display: none; white-space: pre-wrap;
   }
   #talk {
-    position: fixed; left: 12px; bottom: 12px; padding: 6px 10px; border-radius: 8px;
-    font: 12px/1.7 system-ui, sans-serif; color: #cfe; background: #1d2a30; opacity: .85;
+    position: fixed; left: 12px; top: 46px; padding: 5px 10px; border-radius: 10px;
+    font: 12px/1.7 system-ui, sans-serif; color: var(--glass-dim); max-width: 46vw;
   }
-  #talk a { color: #8ff0dc; }
+  #talk a { color: var(--glass-accent); }
 
-  /* 右下角:数值面板。数都在这里,不在画布上,免得挡住她。 */
+  /* 她的回答:浮在模型上方的一条扁字幕。 */
+  #subtitle {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 84px;
+    width: min(920px, calc(100vw - 48px)); padding: 10px 18px; border-radius: 12px;
+    color: var(--glass-ink); font: 16px/1.65 system-ui, sans-serif;
+    text-align: center; white-space: pre-wrap; word-break: break-word;
+    opacity: 0; transition: opacity .18s ease;
+    pointer-events: none;
+  }
+  #subtitle.on { opacity: 1; }
+
+  /* 底部输入区:扁平的,只有我发过的话与输入框,没有滚动条。 */
+  #composer {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px;
+    width: min(920px, calc(100vw - 48px)); padding: 8px 10px; border-radius: 14px;
+    color: var(--glass-ink); font: 14px/1.5 system-ui, sans-serif;
+  }
+  #composer.hidden { display: none; }
+  #mine {
+    display: flex; flex-direction: column; gap: 2px; padding: 2px 4px 6px;
+    font-size: 12px; color: var(--glass-dim); overflow: hidden; max-height: 62px;
+  }
+  #mine div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #mine div:last-child { color: #d7eef0; }
+  #composer form { display: flex; gap: 8px; align-items: center; }
+  #composer input {
+    flex: 1; min-width: 0; padding: 9px 12px; border-radius: 10px;
+    border: 1px solid var(--glass-edge); background: rgba(255, 255, 255, 0.06);
+    color: var(--glass-ink); font: 14px/1.4 system-ui, sans-serif;
+  }
+  #composer input::placeholder { color: #8ea6ad; }
+  #composer input:focus { outline: none; border-color: var(--glass-accent); }
+  button {
+    padding: 8px 16px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--glass-edge); background: var(--glass-bg-strong); color: var(--glass-ink);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+    font: 14px/1.4 system-ui, sans-serif;
+  }
+  button:hover { background: rgba(57, 197, 187, 0.22); border-color: var(--glass-accent); }
+  button:active { transform: translateY(1px); }
+
+  /* 右侧数值面板:同一套玻璃。 */
   #panel {
-    position: fixed; right: 12px; top: 12px; width: 288px; max-height: calc(100% - 24px);
-    overflow-y: auto; padding: 10px 12px 12px; border-radius: 10px;
-    font: 12px/1.6 system-ui, sans-serif; color: #cfe; background: #16202699;
-    border: 1px solid #24343c; backdrop-filter: blur(3px);
+    position: fixed; right: 12px; top: 12px; width: 288px; max-height: calc(100% - 120px);
+    overflow-y: auto; padding: 10px 12px 12px; border-radius: 14px;
+    color: var(--glass-ink); font: 12px/1.6 system-ui, sans-serif;
   }
   #panel h2 {
-    margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #8ff0dc;
+    margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--glass-accent);
     display: flex; justify-content: space-between; align-items: baseline;
   }
-  #panel h2 span { color: #9fb3bd; font-weight: 400; }
+  #panel h2 span { color: var(--glass-dim); font-weight: 400; }
   #panel section { margin-top: 10px; }
-  #panel .muted { color: #7d909a; }
+  #panel .muted { color: var(--glass-dim); }
   .row { display: grid; grid-template-columns: 62px 1fr 44px; gap: 6px; align-items: center; }
-  .row .bar { height: 6px; border-radius: 3px; background: #22313a; overflow: hidden; }
-  .row .bar > i { display: block; height: 100%; background: #39c5bb; width: 0; }
-  .row .num { text-align: right; font: 11px/1.6 ui-monospace, monospace; color: #b7ccd4; }
+  .row .bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.10); overflow: hidden; }
+  .row .bar > i { display: block; height: 100%; background: var(--glass-accent); width: 0; }
+  .row .num, .ctl .num { text-align: right; font: 11px/1.6 ui-monospace, monospace; color: var(--glass-dim); }
   .kv { display: flex; justify-content: space-between; gap: 8px; }
   .kv b { font-weight: 600; color: #dff6f2; }
   .ctl { margin-top: 8px; }
   .ctl label { display: grid; grid-template-columns: 46px 1fr 52px; gap: 6px; align-items: center; margin-top: 4px; }
-  .ctl input[type=range] { width: 100%; }
-  .ctl .num { text-align: right; font: 11px/1.6 ui-monospace, monospace; color: #b7ccd4; }
+  .ctl input[type=range] { width: 100%; accent-color: var(--glass-accent); }
   .btns { display: flex; gap: 6px; margin-top: 8px; }
-  button {
-    flex: 1; padding: 5px 8px; border-radius: 6px; border: 1px solid #2c4048;
-    background: #1d2a30; color: #cfe; font: 12px/1.4 system-ui, sans-serif; cursor: pointer;
-  }
-  button:hover { background: #24343c; }
-  #channels { font: 11px/1.5 ui-monospace, monospace; color: #b7ccd4; }
+  .btns button { flex: 1; padding: 5px 8px; font-size: 12px; }
+  #channels { font: 11px/1.5 ui-monospace, monospace; color: var(--glass-dim); }
   #channels div { display: flex; justify-content: space-between; }
-
-  /* 对话框:跟着她走,但永远留在可见区域里。位置由脚本算,这里只给长相。 */
-  #chat {
-    position: fixed; left: 0; top: 0; width: 340px; max-height: 46vh;
-    display: flex; flex-direction: column; border-radius: 10px;
-    background: #16202699; border: 1px solid #24343c; backdrop-filter: blur(3px);
-    font: 13px/1.6 system-ui, sans-serif; color: #dff6f2; overflow: hidden;
-  }
-  #chat.hidden { display: none; }
-  #chat-log { flex: 1; overflow-y: auto; padding: 10px 12px; min-height: 0; }
-  #chat-log .line { margin-bottom: 8px; }
-  #chat-log .who { font-size: 11px; color: #7d909a; }
-  #chat-log .say { white-space: pre-wrap; word-break: break-word; }
-  #chat-log .her .say { color: #a9f0e2; }
-  #chat-log .sys { font-size: 11px; color: #ffd9a8; white-space: pre-wrap; }
-  #chat form { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid #24343c; }
-  #chat input {
-    flex: 1; min-width: 0; padding: 6px 8px; border-radius: 6px; border: 1px solid #2c4048;
-    background: #101a1f; color: #dff6f2; font: 13px/1.4 system-ui, sans-serif;
-  }
-  #chat input:focus { outline: 1px solid #39c5bb; }
-  #chat button {
-    padding: 6px 12px; border-radius: 6px; border: 1px solid #2c4048; background: #1d2a30;
-    color: #cfe; font: 13px/1.4 system-ui, sans-serif; cursor: pointer;
-  }
-  #chat button:hover { background: #24343c; }
 </style>
 </head>
 <body>
 <canvas id="stage"></canvas>
-<div id="conn">连接中…</div>
-<div id="talk">这一页是她的身体和对话框。可以在下面直接跟她说话;<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话,消息两边都看得到。拖动画面可以挪动她。</div>
+<div id="conn" class="glass">连接中…</div>
+<div id="talk" class="glass">这一页是她的身体。<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话。拖动画面可以挪动她。</div>
 <div id="why"></div>
 
-<div id="panel">
+<!-- 她的回答:一条扁字幕,浮在模型上方。 -->
+<div id="subtitle" class="glass"></div>
+
+<!-- 底部:我发过的话(扁平、无滚动条)+ 输入框。 -->
+<div id="composer" class="glass hidden">
+  <div id="mine"></div>
+  <form id="composer-form" autocomplete="off">
+    <input id="composer-input" type="text" placeholder="对她说点什么…" aria-label="对她说点什么">
+    <button type="submit">说</button>
+  </form>
+</div>
+
+<div id="panel" class="glass">
   <h2>内部状态 <span id="mood">—</span></h2>
   <div id="bars"></div>
 
@@ -117,15 +156,6 @@
     <div class="kv"><span>通道</span><span class="muted">此刻的值</span></div>
     <div id="channels"></div>
   </section>
-</div>
-
-<!-- 对话框:跟着她走,永远留在可见区域里;位置由脚本算。 -->
-<div id="chat" class="hidden">
-  <div id="chat-log"></div>
-  <form id="chat-form" autocomplete="off">
-    <input id="chat-input" type="text" placeholder="对她说点什么…" aria-label="对她说点什么">
-    <button type="submit">说</button>
-  </form>
 </div>
 
 <!-- 三个库由本扩展的渲染服务从配置的播放器库目录转发;应用脚本在 /app.js。 -->

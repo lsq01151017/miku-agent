@@ -23,6 +23,7 @@ interface FakeNode {
   handlers: Record<string, Array<(event: Record<string, unknown>) => void>>;
   innerHTML: string;
   appendChild: (child: FakeNode) => FakeNode;
+  removeChild: (child: FakeNode) => void;
   addEventListener: (type: string, fn: (event: Record<string, unknown>) => void) => void;
   fire: (type: string, event?: Record<string, unknown>) => void;
 }
@@ -63,6 +64,11 @@ function stubBrowser(): {
       id, className: '', textContent: '', style: {}, children: [],
       handlers: {},
       appendChild(child) { node.children.push(child); return child; },
+      removeChild(child) {
+        const at = node.children.indexOf(child);
+        if (at >= 0) node.children.splice(at, 1);
+        return child;
+      },
       addEventListener(type, fn) { (node.handlers[type] = node.handlers[type] ?? []).push(fn); },
       fire(type, event) { for (const fn of node.handlers[type] ?? []) fn(event ?? {}); },
       get innerHTML() { return ''; },
@@ -155,7 +161,7 @@ function stubBrowser(): {
     json: async () => {
       const target = String(url);
       if (target.includes('overrides')) return { Param137: 1 };
-      if (target.includes('chat.json')) return { enabled: true };
+      if (target.includes('chat.json')) return { enabled: true, agent: false };
       return {
         FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
         MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
@@ -311,43 +317,38 @@ describe('播放器页面', () => {
     const back = stubs.written.filter((entry) => entry.param === 'ParamEyeBallX').pop()!;
     expect(Math.abs(back.value)).toBeLessThan(0.1);
 
-    // ── 对话框:话发出去、她的话显示出来、位置跟着她但不越界 ─────────────────
+    // ── 对话:她的话是字幕,我发过的话只在底部输入区 ─────────────────────────
     expect(stubs.sockets.length).toBe(1);
     expect(stubs.sockets[0]!.url).toContain('/chat');
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(stubs.sockets[0]!.sent.join(' ')).toContain('"hello"'); // 连上先报名字
+    expect(node('composer').className).toBe('glass');             // 输入区显示出来
 
+    // 我说话:记在底部,发到那条通道上。
+    node('composer-input').value = '第一句';
+    node('composer-form').fire('submit', { preventDefault: () => {} });
+    node('composer-input').value = '第二句';
+    node('composer-form').fire('submit', { preventDefault: () => {} });
+    expect(node('composer-input').value).toBe('');
+    expect(stubs.sockets[0]!.sent.join(' ')).toContain('第一句');
+    expect(node('mine').children.map((child) => child.textContent)).toEqual(['第一句', '第二句']);
+
+    // 她回话:进字幕,不进底部输入区。
     stubs.sockets[0]!.fire(JSON.stringify({ type: 'msg', from: '初音未来', text: '在的哦' }));
-    const log = node('chat-log');
-    expect(log.children).toHaveLength(1);
-    expect(log.children[0]!.className).toBe('line her');
-    expect(log.children[0]!.children[1]!.textContent).toBe('在的哦');
+    expect(node('subtitle').textContent).toBe('在的哦');
+    expect(node('subtitle').className).toContain('on');
+    expect(node('mine').children).toHaveLength(2);               // 她的回复不落在输入区里
 
-    node('chat-input').value = '你好呀';
-    node('chat-form').fire('submit', { preventDefault: () => {} });
-    expect(stubs.sockets[0]!.sent.join(' ')).toContain('你好呀');
-    expect(node('chat-input').value).toBe('');
+    // 我自己的回显(终端广播回来)不进字幕,也不再记一行。
+    stubs.sockets[0]!.fire(JSON.stringify({ type: 'msg', from: '制作人', text: '第一句' }));
+    expect(node('subtitle').textContent).toBe('在的哦');
 
-    // 位置:她往右走,对话框跟着往右;放到极限就夹在可见区域内(右边给数值面板留位置)。
-    const leftOf = (): number => Number(String(node('chat').style.left).replace('px', ''));
-    const topOf = (): number => Number(String(node('chat').style.top).replace('px', ''));
-    node('zoom').value = '30' as never;
-    node('zoom').fire('input');
-    node('offset-x').value = '0' as never;
-    node('offset-x').fire('input');
-    const centred = leftOf();
-    node('offset-x').value = '300' as never;
-    node('offset-x').fire('input');
-    expect(leftOf()).toBeGreaterThan(centred);          // 跟着她走
-    node('offset-x').value = '400' as never;
-    node('offset-x').fire('input');
-    expect(leftOf()).toBeLessThanOrEqual(1600 - 316 - 340); // 面板与边距之后的位置
-    expect(leftOf()).toBeGreaterThanOrEqual(12);
-    // 纵向同理:把她推到最下面,对话框也不许出界。
-    node('offset-y').value = '400' as never;
-    node('offset-y').fire('input');
-    expect(topOf()).toBeGreaterThanOrEqual(12);
-    expect(topOf()).toBeLessThanOrEqual(900 - 220 - 12);
+    // 底部最多留最近三行,没有滚动条可言。
+    for (const text of ['第三句', '第四句']) {
+      node('composer-input').value = text;
+      node('composer-form').fire('submit', { preventDefault: () => {} });
+    }
+    expect(node('mine').children.map((child) => child.textContent)).toEqual(['第二句', '第三句', '第四句']);
 
     // ── 表情按序号重放 ──────────────────────────────────────────────────────
     send({ channels: { MouthSmile: 0.5 }, expression: 'blush', expressionToken: 1, speaking: false });

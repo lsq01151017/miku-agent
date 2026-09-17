@@ -52,6 +52,58 @@ const SPOKEN_WINDOW_CHARS = 160;
 /** 对话框在形象页上的路由,以及它在控制台那边对应的流式通道。 */
 const CHAT_PATH = '/chat';
 const TERMINAL_CHAT_PATH = '/ws/providers/world%3Aterminal/panels/chat';
+/** 外部 Agent 的聊天入口(挂在 Agent 自己的主机上,例如 http://127.0.0.1:8790/agent/chat)。 */
+const AGENT_CHAT_PATH = '/agent/chat';
+
+/**
+ * 从 Agent 回包的一段里取出文本。
+ *
+ * 宽容是故意的:接进来的 Agent 不是我们写的。JSON 里认 `delta`/`text`/`reply`/`message`/`content`
+ * 与 OpenAI 那层 `choices[].delta.content`;不是 JSON 就整段当文本。
+ */
+function agentDelta(payload: string): string {
+  const text = payload.trim();
+  if (text === '' || text === '[DONE]') return '';
+  if (!text.startsWith('{') && !text.startsWith('[')) return payload;
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    for (const key of ['delta', 'text', 'reply', 'message', 'content', 'response']) {
+      const value = parsed[key];
+      if (typeof value === 'string') return value;
+    }
+    const choices = parsed.choices;
+    if (Array.isArray(choices) && choices.length > 0) {
+      const first = choices[0] as { delta?: { content?: unknown }; message?: { content?: unknown }; text?: unknown };
+      const nested = first?.delta?.content ?? first?.message?.content ?? first?.text;
+      if (typeof nested === 'string') return nested;
+    }
+    return '';
+  } catch {
+    return payload;
+  }
+}
+
+/** 读一个小 JSON 请求体;超过 1MB 当作坏请求。 */
+function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  return new Promise((done, fail) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 1_000_000) {
+        fail(new Error('请求体太大'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (chunks.length === 0) { done({}); return; }
+      try { done(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch (error) { fail(error); }
+    });
+    req.on('error', fail);
+  });
+}
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -435,10 +487,98 @@ export class Live2DWorld implements World {
     }];
   }
 
+  // ── 外部 Agent ──────────────────────────────────────────────────────────────
+
+  /** 外部 Agent 的聊天入口;没配就是 null。 */
+  private agentUrl(): string | null {
+    const base = this.cfg.agentUrl.trim();
+    return base === '' ? null : base.replace(/\/+$/, '') + AGENT_CHAT_PATH;
+  }
+
+  /**
+   * 把页面输入的那句话转给外部 Agent,它流回来的文本一边当字幕推给页面,一边喂给表演层。
+   *
+   * 喂给表演层是关键:接进来的 Agent 说的同样是"她说的话",台词片段、措辞表情、口型与说话时长
+   * 都按这段文本走——外部 Agent 不必知道 Live2D 的任何事情,只要吐字。
+   *
+   * 约定:`POST` JSON `{ message }`;回包可以是 SSE(每段 `data:` 里是 JSON 或纯文本),
+   * 也可以是一次性的 JSON 或纯文本(见 `agentDelta`)。
+   */
+  private async forwardToAgent(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const target = this.agentUrl();
+    if (target === null) {
+      res.writeHead(409, { 'Content-Type': 'text/plain; charset=utf-8' }).end('没有配 worlds.live2d.agentUrl');
+      return;
+    }
+    let message = '';
+    try {
+      const body = await readJsonBody(req) as { message?: unknown };
+      message = typeof body.message === 'string' ? body.message : '';
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('请求体不是 JSON');
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-store',
+      Connection: 'keep-alive',
+    });
+    const send = (delta: string): void => {
+      if (delta === '') return;
+      this.said(delta, Date.now());
+      try { res.write(`data: ${JSON.stringify({ delta })}\n\n`); } catch { /* 页面已经走了 */ }
+    };
+
+    try {
+      const upstream = await fetch(target, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream, application/json' },
+        body: JSON.stringify({ message }),
+      });
+      if (!upstream.ok) throw new Error(`Agent 回了 ${upstream.status}`);
+      const contentType = upstream.headers.get('content-type') ?? '';
+      if (upstream.body !== null && contentType.includes('text/event-stream')) {
+        const reader = upstream.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let at = 0;
+          while ((at = buffer.indexOf('\n\n')) >= 0) {
+            const block = buffer.slice(0, at);
+            buffer = buffer.slice(at + 2);
+            for (const line of block.split('\n')) {
+              if (line.startsWith('data:')) send(agentDelta(line.slice(5)));
+            }
+          }
+        }
+      } else {
+        send(agentDelta(await upstream.text()));
+      }
+      try {
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+      } catch { /* 页面已经走了 */ }
+    } catch (error) {
+      this.host?.log.warn('转给外部 Agent 失败', { url: target, err: String(error) });
+      try {
+        res.write(`data: ${JSON.stringify({ error: `连不上外部 Agent:${String(error)}` })}\n\n`);
+        res.end();
+      } catch { /* 同上 */ }
+    }
+  }
+
   // ── HTTP ────────────────────────────────────────────────────────────────────
 
   private handle(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (req.method === 'POST' && url.pathname === AGENT_CHAT_PATH) {
+      void this.forwardToAgent(req, res);
+      return;
+    }
     if (req.method !== 'GET') {
       res.writeHead(405).end('only GET');
       return;
@@ -456,8 +596,11 @@ export class Live2DWorld implements World {
         return this.sendJson(res, this.paramOverrides);
       }
       if (url.pathname === '/pack/chat.json') {
-        // 页面据此决定要不要显示对话框:没配控制台地址就是没有这一块。
-        return this.sendJson(res, { enabled: this.cfg.consoleUrl !== '' });
+        // 页面据此决定要不要显示输入区:没有控制台也没有外部 Agent 就是没有这一块。
+        return this.sendJson(res, {
+          enabled: this.cfg.consoleUrl !== '',
+          agent: this.agentUrl() !== null,
+        });
       }
       if (url.pathname === '/pack/expressions.json') {
         const current = this.syncExpression(Date.now());
