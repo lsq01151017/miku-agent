@@ -56,7 +56,7 @@ function stubBrowser(): {
   };
   globals.fetch = async (url: string) => ({
     json: async () => (String(url).includes('overrides')
-      ? { Param137: 0 }
+      ? { Param137: 1 }
       : {
         FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
         MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
@@ -124,7 +124,7 @@ describe('播放器页面', () => {
     expect(last('ParamMouthForm')).toBeGreaterThan(0);
     // 通道表里映射是 null 的(EyeLeftX:包说与右眼共用),不该写。
     expect(stubs.written.some((entry) => entry.param === 'ParamEyeBallX')).toBe(false);
-    // 不归通道管的参数定值每帧照写(模型的水印开关 Param137)。
-    expect(last('Param137')).toBe(0);
+    // 不归通道管的参数定值每帧照写(这份部署把模型的水印开关 Param137 钉成 1)。
+    expect(last('Param137')).toBe(1);
   });
 });

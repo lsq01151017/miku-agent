@@ -312,8 +312,8 @@ describe('通道偏移与参数定值', () => {
   });
 
   it('参数定值按参数名给渲染端,每帧照写', async () => {
-    await start({ paramOverrides: 'Param137=0' });
-    expect(await (await fetch(url('/pack/overrides.json'))).json()).toEqual({ Param137: 0 });
+    await start({ paramOverrides: 'Param137=1' });
+    expect(await (await fetch(url('/pack/overrides.json'))).json()).toEqual({ Param137: 1 });
   });
 
   it('配置串写得不成样子时不猜:解析不出的项丢掉', async () => {

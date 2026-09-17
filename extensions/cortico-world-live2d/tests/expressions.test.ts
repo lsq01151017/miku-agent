@@ -11,7 +11,7 @@ const ALL = new Set(['blush', 'lean', 'swirl', 'sing', 'heart', 'leek', 'chibi',
 describe('MOOD_EXPRESSIONS', () => {
   it('只挂情绪类的表情,标记与水印不在表里', () => {
     expect(Object.values(MOOD_EXPRESSIONS).sort()).toEqual(['blush', 'heart', 'lean', 'sing']);
-    // 水印是作者的,程序不该动它;葱与 QQ 人是标记不是情绪。
+    // 道具、画风与水印不是情绪;水印由部署的 paramOverrides 定值,不走这张表。
     expect(Object.values(MOOD_EXPRESSIONS)).not.toContain('watermark');
     expect(Object.values(MOOD_EXPRESSIONS)).not.toContain('leek');
     expect(Object.values(MOOD_EXPRESSIONS)).not.toContain('chibi');

@@ -37,8 +37,9 @@ export interface Live2DConfigSection extends WorldSection {
   /**
    * 直接钉住某几个模型参数的定值,写成 `参数名=数值`,逗号分隔,渲染端每帧写一次。
    *
-   * 用在**不归通道管**的参数上。实测:模型的水印是 `Param137`,作者注明「默认打开,
-   * 需在设置表情中关闭」——钉成 0 就是照作者给的方式关掉它,不动模型文件。
+   * 用在**不归通道管**的参数上。实测:模型的水印挂在 `Param137` 上,默认值 0 时三个水印
+   * 图层的透明度是 1(看得见),钉成 1 才是透明——作者的使用说明称「水印按键默认打开,
+   * 需在设置表情中关闭」,对应的就是这条参数,不必改模型文件。
    */
   paramOverrides: string;
   /** state 片段保持多久后开始淡出。 */
@@ -112,7 +113,7 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
       'paramOverrides': {
         type: 'string',
         title: '参数定值',
-        description: '写成「参数名=数值」，多项用逗号分隔，渲染端每帧写一次，例如 Param137=0 关掉水印。'
+        description: '写成「参数名=数值」，多项用逗号分隔，渲染端每帧写一次，例如 Param137=1 关掉水印。'
           + '用在不由通道驱动的参数上。',
       },
       'stateHoldMs': {
