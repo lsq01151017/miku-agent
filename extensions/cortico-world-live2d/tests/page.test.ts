@@ -1,41 +1,81 @@
 /**
- * 播放器页面自己的逻辑:推流帧 → 通道值 → 模型参数,以及表情切换。
+ * 播放器页面自己的逻辑:推流帧 → 通道值 → 模型参数,表情切换,以及右下角那块数值面板
+ * (情绪六维、心情、表情、正在做的片段、通道值)和取景控件(缩放 / 左右 / 上下 / 复位 / 记住)。
  *
  * 渲染本身(WebGL/Cubism)只有浏览器能验,但页面**应用这些值的那段代码**可以在这里跑起来:
- * 用替身顶掉 document / PIXI / EventSource,喂一帧进去,推几帧,看它到底写了哪些参数。
+ * 用替身顶掉 document / PIXI / EventSource,喂一帧进去,推几帧,看它写了哪些参数、面板上出现了哪些数。
  *
  * 写参数发生在模型的 `beforeModelUpdate` 上(参数复位之后、更新之前),所以替身把那个钩子
  * 也截下来,由 `pump` 一帧一帧地推——这正是浏览器里每帧发生的事。
+ *
+ * 页面脚本是 IIFE,一个进程里只会 boot 一次(第二次 import 拿到的是同一份模块),
+ * 所以这个文件里的检查都在同一次 boot 之后按顺序做完。
  */
 import { afterEach, describe, expect, it } from 'vitest';
 
 interface Written { param: string; value: number }
+interface FakeNode {
+  id: string;
+  className: string;
+  textContent: string;
+  style: Record<string, string>;
+  children: FakeNode[];
+  handlers: Record<string, Array<(event: Record<string, unknown>) => void>>;
+  innerHTML: string;
+  appendChild: (child: FakeNode) => FakeNode;
+  addEventListener: (type: string, fn: (event: Record<string, unknown>) => void) => void;
+  fire: (type: string, event?: Record<string, unknown>) => void;
+}
 
-/** 一次性的浏览器替身:记录页面写进模型的参数与切过的表情,并让测试能驱动帧。 */
+/** 一次性的浏览器替身:记录页面写进模型的参数、切过的表情、面板上的数与取景。 */
 function stubBrowser(): {
   written: Written[];
   expressions: string[];
+  scales: number[];
+  positions: Array<{ x: number; y: number }>;
+  nodes: Map<string, FakeNode>;
+  stored: string[];
   instances: Array<{ onmessage: ((event: { data: string }) => void) | null }>;
   /** 跑 n 帧:每帧先走页面的 requestAnimationFrame,再走模型的 beforeModelUpdate。 */
   pump: (frames: number) => void;
 } {
   const written: Written[] = [];
   const expressions: string[] = [];
+  const scales: number[] = [];
+  const positions: Array<{ x: number; y: number }> = [];
+  const nodes = new Map<string, FakeNode>();
+  const stored: string[] = [];
   const instances: Array<{ onmessage: ((event: { data: string }) => void) | null }> = [];
   let pending: (() => void) | null = null;
   let beforeModelUpdate: (() => void) | null = null;
-  /** 眨眼逻辑自己算出来的参数值;通道值应当在它上面叠加,不是覆盖。 */
   const blink = 0.8;
 
-  const element = (): Record<string, unknown> => ({ style: {}, className: '', textContent: '', appendChild: () => {} });
-  const conn = { className: '', textContent: '' };
+  const makeNode = (id: string): FakeNode => {
+    const node: FakeNode = {
+      id, className: '', textContent: '', style: {}, children: [],
+      handlers: {},
+      appendChild(child) { node.children.push(child); return child; },
+      addEventListener(type, fn) { (node.handlers[type] = node.handlers[type] ?? []).push(fn); },
+      fire(type, event) { for (const fn of node.handlers[type] ?? []) fn(event ?? {}); },
+      get innerHTML() { return ''; },
+      set innerHTML(_value: string) { node.children.length = 0; },
+    };
+    return node;
+  };
+  const nodeFor = (id: string): FakeNode => {
+    const existing = nodes.get(id);
+    if (existing) return existing;
+    const created = makeNode(id);
+    nodes.set(id, created);
+    return created;
+  };
 
   const model = {
     width: 100,
     height: 100,
-    scale: { set: () => {} },
+    scale: { set: (value: number) => scales.push(value), x: 1 },
     anchor: { set: () => {} },
-    position: { set: () => {} },
+    position: { set: (x: number, y: number) => positions.push({ x, y }) },
     internalModel: {
       settings: {
         groups: [{ Target: 'Parameter', Name: 'EyeBlink', Ids: ['ParamEyeLOpen'] }],
@@ -56,11 +96,18 @@ function stubBrowser(): {
   for (const key of ['document', 'window', 'requestAnimationFrame', 'PIXI', 'fetch', 'EventSource']) {
     if (!saved.has(key)) saved.set(key, globals[key]);
   }
-  globals.document = { getElementById: (id: string) => (id === 'conn' ? conn : element()) };
+  globals.document = {
+    getElementById: (id: string) => nodeFor(id),
+    createElement: (tag: string) => makeNode(tag),
+  };
   globals.window = {
     innerWidth: 800,
     innerHeight: 600,
     addEventListener: () => {},
+    localStorage: {
+      getItem: () => null,
+      setItem: (_key: string, value: string) => { stored.push(value); },
+    },
     __DSH_MODEL_FILE__: 'miku.model3.json',
   };
   globals.requestAnimationFrame = (callback: () => void) => { pending = callback; return 1; };
@@ -87,9 +134,7 @@ function stubBrowser(): {
   globals.EventSource = FakeEventSource;
 
   return {
-    written,
-    expressions,
-    instances,
+    written, expressions, scales, positions, nodes, stored, instances,
     pump: (frames: number) => {
       for (let i = 0; i < frames; i++) {
         const callback = pending;
@@ -112,14 +157,8 @@ afterEach(() => {
   saved.clear();
 });
 
-const frame = (body: Record<string, unknown>): string => JSON.stringify(body);
-
-/**
- * 页面脚本是 IIFE,一个进程里只会 boot 一次(第二次 import 拿到的是同一份模块),
- * 所以这个文件里的检查都在同一次 boot 之后按顺序做完。
- */
 describe('播放器页面', () => {
-  it('把推流帧写进模型参数、按序号重放表情', async () => {
+  it('写参数、切表情、显示数值、调取景', async () => {
     const stubs = stubBrowser();
     await import('../web/app.js');
     // boot() 是异步的:让它把 channels.json 与模型都取完。
@@ -127,19 +166,25 @@ describe('播放器页面', () => {
     expect(stubs.instances.length).toBe(1);
 
     const send = (body: Record<string, unknown>): void => {
-      stubs.instances[0]!.onmessage!({ data: frame(body) });
+      stubs.instances[0]!.onmessage!({ data: JSON.stringify(body) });
     };
     const last = (param: string): number | undefined =>
       stubs.written.filter((entry) => entry.param === param).pop()?.value;
+    const node = (id: string): FakeNode => stubs.nodes.get(id)!;
 
     send({
       channels: { FaceAngleZ: 12, MouthSmile: 0.5, EyeOpenLeft: 0.2, EyeLeftX: 0.9 },
       expression: 'blush',
       expressionToken: 1,
-      speaking: false,
+      speaking: true,
+      emotion: { valence: 0.5, arousal: 0.6, bond: 0.2, loneliness: 0.1, shyness: 0.62, empathy: 0 },
+      mood: '害羞',
+      clips: ['nod', 'speech_onset'],
+      clients: 2,
     });
     stubs.pump(6);
 
+    // ── 参数 ────────────────────────────────────────────────────────────────
     expect(stubs.expressions).toEqual(['blush']);
     // 平滑是渐进的:推 6 帧之后应当已经朝目标走了一段,但还没到 12。
     expect(last('ParamAngleZ')).toBeGreaterThan(0);
@@ -147,17 +192,68 @@ describe('播放器页面', () => {
     expect(last('ParamMouthForm')).toBeGreaterThan(0);
     // 通道表里映射是 null 的(EyeLeftX:包说与右眼共用),不该写。
     expect(stubs.written.some((entry) => entry.param === 'ParamEyeBallX')).toBe(false);
-    // 眨眼参数走加法:眨眼逻辑给 0.8,通道在它上面叠加,所以写下去的值始终大于 0.8。
-    // 覆盖式写法则会写成一个远小于 0.8 的数——那正好是把眨眼关掉。
+    // 眨眼参数走加法:眨眼逻辑给 0.8,通道在它上面叠加。
     expect(last('ParamEyeLOpen')).toBeGreaterThan(0.8);
     expect(last('ParamEyeLOpen')).toBeLessThanOrEqual(1);
     // 不归通道管的参数定值每帧照写(这份部署把模型的水印开关 Param137 钉成 1)。
     expect(last('Param137')).toBe(1);
 
-    // 表情按序号重放:同一个序号不重放,序号变了(她第二次说「害羞」)要重放。
+    // ── 数值面板 ────────────────────────────────────────────────────────────
+    expect(node('mood').textContent).toBe('害羞');
+    expect(node('expression').textContent).toBe('blush');
+    expect(node('clips').textContent).toBe('nod, speech_onset');
+    expect(node('speaking').textContent).toBe('是');
+    expect(node('clients').textContent).toBe('2');
+    // 六维各一行,数字与条宽都跟着帧走。
+    expect(node('bars').children).toHaveLength(6);
+    const shyRow = node('bars').children[4]!;
+    expect(shyRow.children[2]!.textContent).toBe('0.62');
+    expect(shyRow.children[1]!.children[0]!.style.width).toBe('62%');
+    const valenceRow = node('bars').children[0]!;
+    expect(valenceRow.children[2]!.textContent).toBe('0.50');
+    expect(valenceRow.children[1]!.children[0]!.style.width).toBe('75%'); // -1..1 映到 0..100%
+    // 通道值:帧里出现的通道各一行。
+    expect(node('channels').children.length).toBeGreaterThanOrEqual(4);
+
+    // ── 取景 ────────────────────────────────────────────────────────────────
+    const fit = stubs.scales[stubs.scales.length - 1]!;
+    stubs.scales.length = 0;
+    node('zoom').fire('input');   // 滑块初值 100
+    expect(stubs.scales[stubs.scales.length - 1]).toBeCloseTo(fit, 6);
+
+    node('zoom').value = '150' as never;
+    node('zoom').fire('input');
+    expect(stubs.scales[stubs.scales.length - 1]).toBeCloseTo(fit * 1.5, 6);
+    expect(node('zoom-val').textContent).toBe('150%');
+
+    // 左右 / 上下:位置 = 画布中心 + 偏移。
+    node('offset-x').value = '40' as never;
+    node('offset-x').fire('input');
+    node('offset-y').value = '-25' as never;
+    node('offset-y').fire('input');
+    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 400 + 40, y: 300 - 25 });
+
+    // 直接拖画面:拖动位移就是取景偏移,松手即存。
+    node('stage').fire('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 });
+    node('stage').fire('pointermove', { clientX: 130, clientY: 90, pointerId: 1 });
+    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 400 + 70, y: 300 - 35 });
+    node('stage').fire('pointerup', {});
+    expect(stubs.stored.length).toBeGreaterThan(0);
+    expect(JSON.parse(stubs.stored[stubs.stored.length - 1]!)).toMatchObject({ zoom: 1.5, x: 70, y: -35 });
+
+    // 复位:回到 100% 与画面中心。
+    node('btn-reset').fire('click');
+    expect(stubs.scales[stubs.scales.length - 1]).toBeCloseTo(fit, 6);
+    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 400, y: 300 });
+    expect(node('zoom-val').textContent).toBe('100%');
+    expect(node('offset-x-val').textContent).toBe('0');
+
+    // ── 表情按序号重放 ──────────────────────────────────────────────────────
     send({ channels: { MouthSmile: 0.5 }, expression: 'blush', expressionToken: 1, speaking: false });
     send({ channels: { MouthSmile: 0.5 }, expression: 'blush', expressionToken: 2, speaking: false });
     send({ channels: { MouthSmile: 0.5 }, expression: null, expressionToken: 3, speaking: false });
     expect(stubs.expressions).toEqual(['blush', 'blush']);
+    expect(node('speaking').textContent).toBe('否');
+    expect(node('clips').textContent).toBe('—');
   });
 });

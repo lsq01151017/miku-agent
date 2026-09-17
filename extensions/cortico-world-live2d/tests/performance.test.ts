@@ -81,15 +81,18 @@ describe('表现引擎', () => {
   beforeEach(() => { pack = loadPack(PACK_DIR); });
   afterEach(() => {});
 
-  it('没有片段时就是基线', () => {
-    const performance = new Performance(pack);
+  it('没有片段时就是基线(待机动作单独算)', () => {
+    const performance = new Performance(pack, { idleAmount: 0 });
     performance.setBaseline({ MouthSmile: 0.4, FaceAngleZ: 1 });
     expect(performance.channelsAt(1000)).toMatchObject({ MouthSmile: 0.4, FaceAngleZ: 1 });
   });
 
   it('词表命中触发片段,并按轨道推进', () => {
-    const performance = new Performance(pack);
+    // 待机动作关掉,并且直接 play 片段:这一条量的是轨道本身,不含说话的头部动作。
+    const performance = new Performance(pack, { idleAmount: 0 });
     expect(performance.speak('我点点头表示同意', 0)).toEqual(['nod']);
+    performance.clear();
+    performance.play('nod', 'gesture', 0);
     const at = (ms: number) => performance.channelsAt(ms).FaceAngleY!;
     expect(at(0)).toBe(0);
     expect(at(190)).toBeCloseTo(-26, 1);   // 关键帧
@@ -103,7 +106,8 @@ describe('表现引擎', () => {
     const triggered = performance.speak('用力点头', 0);
     expect(triggered).toEqual(['nod']);
     // intensity 1.35 来自"用力点头"那条,证明赢的是长词
-    expect(performance.activeClips(0)[0]!.intensity).toBeCloseTo(1.35, 5);
+    const nod = performance.activeClips(0).find((c) => c.clipId === 'nod')!;
+    expect(nod.intensity).toBeCloseTo(1.35, 5);
   });
 
   it('别名归到同一个词', () => {
@@ -114,15 +118,17 @@ describe('表现引擎', () => {
   it('同类 state 互相替换,不同类可以并存', () => {
     const performance = new Performance(pack);
     performance.speak('微笑', 0);
-    expect(performance.activeClips(0).map((c) => c.clipId)).toEqual(['smile']);
+    // 说一句话自带一个起音动作;它属于 speech 一类,不参与下面几类的替换。
+    expect(performance.activeClips(0).map((c) => c.clipId).sort()).toEqual(['smile', 'speech_onset']);
     performance.speak('歪头', 100);
-    expect(performance.activeClips(100).map((c) => c.clipId).sort()).toEqual(['smile', 'tilt_hold']);
+    expect(performance.activeClips(100).map((c) => c.clipId).sort()).toEqual(['smile', 'speech_onset', 'tilt_hold']);
     performance.speak('生气', 200);
-    expect(performance.activeClips(200).map((c) => c.clipId).sort()).toEqual(['angry', 'tilt_hold']);
+    expect(performance.activeClips(200).map((c) => c.clipId).sort()).toEqual(['angry', 'speech_onset', 'tilt_hold']);
   });
 
   it('视线片段写眼睛与头,并带确定性的扫视', () => {
-    const performance = new Performance(pack);
+    // 待机动作关掉:这一条只看片段本身写了什么。
+    const performance = new Performance(pack, { idleAmount: 0 });
     expect(performance.speak('看向屏幕', 0)).toEqual(['screen']);
     const still = performance.channelsAt(0);
     expect(still.EyeRightX).toBeCloseTo(-0.5, 6); // screen 的目标值
@@ -132,7 +138,7 @@ describe('表现引擎', () => {
   });
 
   it('state 保持一段时间后淡出,不会让一个表情永远挂着', () => {
-    const performance = new Performance(pack, { stateHoldMs: 1000, stateFadeMs: 1000 });
+    const performance = new Performance(pack, { stateHoldMs: 1000, stateFadeMs: 1000, idleAmount: 0 });
     // 真实用法:基线一直在,片段是在它之上加减。
     performance.setBaseline(baselineChannels(EMOTION_BASELINE));
     performance.speak('微笑', 0);
@@ -159,7 +165,8 @@ describe('表现引擎', () => {
   it('缺片段的词不触发任何东西', () => {
     const performance = new Performance(pack);
     expect(performance.speak('惊讶特效', 0)).toEqual([]);
-    expect(performance.activeClips(0)).toHaveLength(0);
+    // 词表里没有可演的东西,但"她开口了"这件事本身还是有一个起音动作。
+    expect(performance.activeClips(0).map((c) => c.clipId)).toEqual(['speech_onset']);
   });
 
   it('play() 直接触发,不走词表', () => {
@@ -170,11 +177,57 @@ describe('表现引擎', () => {
   });
 
   it('clear() 之后只剩基线', () => {
-    const performance = new Performance(pack);
+    const performance = new Performance(pack, { idleAmount: 0 });
     performance.setBaseline({ MouthSmile: 0.2 });
     performance.speak('微笑', 0);
     performance.clear();
     expect(performance.channelsAt(0)).toMatchObject({ MouthSmile: 0.2 });
+  });
+
+  it('待机动作一直在:没有片段时通道也随时间变,同一时刻算出同一组值', () => {
+    const performance = new Performance(pack);
+    const a = performance.channelsAt(1000);
+    const b = performance.channelsAt(2500);
+    expect(a.FaceAngleZ).not.toBe(b.FaceAngleZ);
+    expect(a.EyeRightX).not.toBe(b.EyeRightX);
+    // 纯函数:换个实例、同一时刻,值一样。
+    expect(new Performance(pack).channelsAt(1000)).toEqual(a);
+  });
+
+  it('待机幅度可以关掉:idleAmount=0 时她是不动的', () => {
+    const performance = new Performance(pack, { idleAmount: 0 });
+    expect(performance.channelsAt(1000)).toEqual(performance.channelsAt(2500));
+    expect(performance.channelsAt(1000).FaceAngleZ ?? 0).toBe(0);
+  });
+
+  it('说话自带头部动作:每句起音一次,之后按序轮换重音', () => {
+    const performance = new Performance(pack);
+    performance.speak('你好', 0);
+    expect(performance.activeClips(0).map((c) => c.clipId)).toEqual(['speech_onset']);
+
+    // 说够 14 个字给一个重音;再说够 14 个字换下一个:不连着重复同一个。
+    const line = '一二三四五六七八九十十一十二十三十四';
+    performance.speak(line, 100);
+    const first = performance.activeClips(100).map((c) => c.clipId).filter((id) => id.startsWith('accent_'));
+    expect(first).toHaveLength(1);
+
+    performance.speak(line, 200);
+    const second = performance.activeClips(200).map((c) => c.clipId).filter((id) => id.startsWith('accent_'));
+    expect(second).toHaveLength(1);
+    expect(second[0]).not.toBe(first[0]);
+  });
+
+  it('新的一句隔了足够久才重新起音', () => {
+    const performance = new Performance(pack, { speechGapMs: 500 });
+    performance.speak('你好', 0);
+    expect(performance.activeClips(0).map((c) => c.clipId)).toEqual(['speech_onset']);
+    // 500ms 之内继续说:还是那一个起音,没有新的。
+    performance.speak('再说一句', 200);
+    expect(performance.activeClips(200).map((c) => c.clipId)).toEqual(['speech_onset']);
+    // 隔够了:下一句重新起音(旧的那一下已经被新的顶掉,数量仍是一个)。
+    performance.speak('又一句', 900);
+    expect(performance.activeClips(900).map((c) => c.clipId)).toEqual(['speech_onset']);
+    expect(performance.activeClips(900)[0]!.startedAtMs).toBe(900);
   });
 });
 

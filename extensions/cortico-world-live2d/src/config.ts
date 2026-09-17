@@ -52,6 +52,13 @@ export interface Live2DConfigSection extends WorldSection {
   speechTailMs: number;
   /** 按字数估的说话速度(毫秒/字);口型与"她在说话"的时长用它。 */
   speechMsPerChar: number;
+  /**
+   * 待机动作的幅度倍率。
+   *
+   * 呼吸、微晃、视线游移按绝对时间算,一直在;设 0 她就完全静止。这些动作让"她什么都没说"
+   * 的时候也不是一张静止的图,台词与情绪基线才叠在活人身上。
+   */
+  idleAmount: number;
 }
 
 export const LIVE2D_DEFAULTS: Live2DConfigSection = {
@@ -69,6 +76,7 @@ export const LIVE2D_DEFAULTS: Live2DConfigSection = {
   expressionHoldMs: 9_000,
   speechTailMs: 600,
   speechMsPerChar: 130,
+  idleAmount: 1,
 };
 
 export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
@@ -164,6 +172,13 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         maximum: 2000,
         'x-suffix': 'ms/字',
         description: '按字数估这段话说出来要多久;口型动的时长按它算。没有语音合成,这是估算不是唇形同步。',
+      },
+      'idleAmount': {
+        type: 'number',
+        title: '待机动作幅度',
+        minimum: 0,
+        maximum: 3,
+        description: '呼吸、微晃、视线游移的幅度倍率,一直在跑;设 0 她就完全静止。',
       },
     },
   },

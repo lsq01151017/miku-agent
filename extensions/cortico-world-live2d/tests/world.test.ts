@@ -138,7 +138,8 @@ describe('静态路由', () => {
 
 describe('内部状态驱动', () => {
   it('推入情绪后,推流里的通道值随之改变(即便她一句话没说)', async () => {
-    const live = await start();
+    // 待机动作关掉:这一条量的是情绪基线本身,不要让呼吸晃进来。
+    const live = await start({ idleAmount: 0 });
     const controller = new AbortController();
     const frame = await firstFrame(controller.signal) as { channels: Record<string, number> };
     controller.abort();
@@ -217,7 +218,7 @@ describe('心情驱动的表情层', () => {
 
 describe('outputTap', () => {
   it('正文里的词触发对应片段,并出现在推流里', async () => {
-    const live = await start();
+    const live = await start({ idleAmount: 0 });
     const tap = live.outputTap();
     tap.onEvent({ type: 'response.output_text.delta', delta: '我点点头' } as never);
     const controller = new AbortController();
@@ -246,7 +247,7 @@ describe('outputTap', () => {
   });
 
   it('被打断时清掉片段,不让动作卡在半路', async () => {
-    const live = await start();
+    const live = await start({ idleAmount: 0 });
     const tap = live.outputTap();
     tap.onEvent({ type: 'response.output_text.delta', delta: '微笑' } as never);
     expect(live.console().badges).toBeDefined();
@@ -278,6 +279,41 @@ describe('outputTap', () => {
 });
 
 describe('台词即演出指令', () => {
+  it('推流帧带上数值面板要的那几项:情绪六维、心情、正在做的片段', async () => {
+    const live = await start();
+    live.setInternalState({ ...calm, shyness: 0.62, valence: 0.5 }, '害羞');
+    const controller = new AbortController();
+    const frame = await firstFrame(controller.signal) as {
+      emotion: Record<string, number>;
+      mood: string;
+      clips: string[];
+      expression: string | null;
+    };
+    controller.abort();
+    expect(frame.mood).toBe('害羞');
+    expect(frame.emotion.shyness).toBeCloseTo(0.62, 6);
+    expect(frame.emotion.valence).toBeCloseTo(0.5, 6);
+    expect(frame.expression).toBe('blush');
+    expect(Array.isArray(frame.clips)).toBe(true);
+  });
+
+  it('她什么都没说的时候身体也在动:待机动作', async () => {
+    const live = await start();
+    // 不加任何片段:两帧之间通道值仍应变化,否则画面是一张静止的图。
+    const a = await firstFrame(new AbortController().signal) as { channels: Record<string, number> };
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    const b = await firstFrame(new AbortController().signal) as { channels: Record<string, number> };
+    expect(a.channels.FaceAngleZ).not.toBe(b.channels.FaceAngleZ);
+  });
+
+  it('关掉待机动作后纹丝不动', async () => {
+    const live = await start({ idleAmount: 0 });
+    const a = await firstFrame(new AbortController().signal) as { channels: Record<string, number> };
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    const b = await firstFrame(new AbortController().signal) as { channels: Record<string, number> };
+    expect(a.channels).toEqual(b.channels);
+  });
+
   it('措辞命中的表情压过心情那张,过期后回到心情那张', async () => {
     const live = await start({ expressionHoldMs: 60 });
     live.setInternalState(calm, '元气'); // 心情那张是 sing

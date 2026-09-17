@@ -36,16 +36,26 @@ export interface PerformanceOptions {
   stateFadeMs: number;
   /** 待机扫视的周期。 */
   scanPeriodMs: number;
+  /** 待机动作的幅度倍率;0 就是完全静止。 */
+  idleAmount: number;
+  /** 隔多久没有新字就算"上一句说完了",下一句重新起音。 */
+  speechGapMs: number;
 }
 
 export const PERFORMANCE_DEFAULTS: PerformanceOptions = {
   stateHoldMs: 25_000,
   stateFadeMs: 8_000,
   scanPeriodMs: 4_000,
+  idleAmount: 1,
+  speechGapMs: 900,
 };
 
 const TAU = Math.PI * 2;
 const round = (value: number): number => Math.round(value * 1000) / 1000;
+/** 说话时头部重音片段的命名前缀;包里那几个是给"说到某个字时点一下头"用的。 */
+const ACCENT_PREFIX = 'accent_';
+/** 说满这么多字给一个头部重音。 */
+const ACCENT_EVERY_CHARS = 14;
 
 /** 线性插值;第一帧之前取第一帧,最后一帧之后取最后一帧。 */
 function trackValue(track: ReadonlyArray<readonly [number, number]>, atMs: number): number {
@@ -67,9 +77,16 @@ export class Performance {
   private baseline: ChannelValues = {};
   private active: ActiveClip[] = [];
   private readonly opts: PerformanceOptions;
+  /** 说话时的头部重音:包里 `accent_` 开头的脉冲片段,按序轮换,不让每句都同一个动作。 */
+  private readonly accents: readonly string[];
+  private accentIndex = 0;
+  private charsSinceAccent = 0;
+  /** 从"还没说过话"开始:第一句永远算新的一句。 */
+  private lastSpokeAtMs = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly pack: Pack, opts: Partial<PerformanceOptions> = {}) {
     this.opts = { ...PERFORMANCE_DEFAULTS, ...opts };
+    this.accents = Object.keys(this.pack.clips.pulse).filter((id) => id.startsWith(ACCENT_PREFIX)).sort();
   }
 
   /** 内部状态算出的基线;整个身体的地板。 */
@@ -99,13 +116,25 @@ export class Performance {
   }
 
   /**
-   * 说了一句台词:扫词表并触发命中的片段。返回这次触发的片段 id(按触发顺序)。
+   * 说了一句台词:扫词表并触发命中的片段。返回这次**词表命中**的片段 id(按触发顺序)。
+   *
+   * 说话本身也是表演:新的一句起音一个 `speech_onset`,之后每说满 `ACCENT_EVERY_CHARS` 个字
+   * 点一下头,重音片段按序轮换——同一句话里不会连着两次一样,跨句也是。轮换而不是随机:
+   * 同一时刻同一输入必须算出同一组值。这几个动作同样进 `activeClips()`,只是不算"词表命中",
+   * 所以不出现在返回值里:调用方按返回值判断"她这句话说了哪个手势"。
    *
    * 词表提到、素材包里没有的片段直接不触发——缺口由 `loadPack` 的 `missingClipIds` 报出。
    */
   speak(text: string, nowMs: number): string[] {
-    const taken: Array<[number, number]> = [];
+    if (nowMs - this.lastSpokeAtMs > this.opts.speechGapMs) {
+      // 上一句已经过去了:这是新的一句,起音 + 重音从头轮。
+      this.charsSinceAccent = 0;
+      if (this.pack.clips.pulse['speech_onset']) this.play('speech_onset', 'speech', nowMs);
+    }
+    this.lastSpokeAtMs = nowMs;
+
     const triggered: string[] = [];
+    const taken: Array<[number, number]> = [];
     for (const { word, entry } of this.candidates()) {
       let from = 0;
       for (;;) {
@@ -117,6 +146,14 @@ export class Performance {
         taken.push([at, end]);
         if (this.trigger(entry, nowMs)) triggered.push(entry.clipId);
       }
+    }
+
+    this.charsSinceAccent += [...text].length;
+    if (this.accents.length > 0 && this.charsSinceAccent >= ACCENT_EVERY_CHARS) {
+      this.charsSinceAccent = 0;
+      const accent = this.accents[this.accentIndex % this.accents.length]!;
+      this.accentIndex += 1;
+      this.play(accent, 'speech', nowMs);
     }
     return triggered;
   }
@@ -150,10 +187,38 @@ export class Performance {
     return true;
   }
 
-  /** 此刻的通道值:基线 + 活动片段,按量程裁剪。顺带清掉已经结束的片段。 */
+  /**
+   * 待机动作:呼吸、微晃、视线游移。
+   *
+   * 全是**绝对时间的纯函数**(几个不同周期的正弦),不是随机数:同一时刻算出同一组值,
+   * 所以对照与测试都成立。它一直在,让"她什么都没说"的时候也不是一张静止的图;
+   * 有了它,台词片段与情绪基线才是叠在一个活人身上,而不是叠在雕像上。
+   */
+  private idleChannels(nowMs: number): ChannelValues {
+    const amount = this.opts.idleAmount;
+    if (amount <= 0) return {};
+    const t = nowMs / 1000;
+    const breath = Math.sin((TAU * t) / 4.2);            // 呼吸:约 4.2 秒一次
+    const sway = Math.sin((TAU * t) / 7.3 + 0.7);        // 身体微晃:比呼吸慢
+    const glanceX = Math.sin((TAU * t) / 5.1 + 1.9);     // 视线游移:比微晃快
+    const glanceY = Math.sin((TAU * t) / 3.3 + 0.4);
+    return {
+      FaceAngleY: round(breath * 0.8 * amount),
+      FaceAngleX: round(sway * 1.1 * amount),
+      FaceAngleZ: round(sway * 1.6 * amount),
+      EyeRightX: round(glanceX * 2.4 * amount),
+      EyeRightY: round(glanceY * 1.2 * amount),
+      MouthSmile: round(breath * 0.06 * amount),
+    };
+  }
+
+  /** 此刻的通道值:基线 + 待机动作 + 活动片段,按量程裁剪。顺带清掉已经结束的片段。 */
   channelsAt(nowMs: number): ChannelValues {
     this.prune(nowMs);
     const out: ChannelValues = { ...this.baseline };
+    for (const [channel, value] of Object.entries(this.idleChannels(nowMs))) {
+      out[channel] = (out[channel] ?? 0) + value;
+    }
     for (const clip of this.active) {
       const elapsed = nowMs - clip.startedAtMs;
       const weight = this.weightOf(clip, elapsed);

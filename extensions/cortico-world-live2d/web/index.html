@@ -6,14 +6,15 @@
 <title>初音未来 · Live2D</title>
 <style>
   html, body { margin: 0; height: 100%; background: #10161a; overflow: hidden; }
-  canvas { display: block; }
+  canvas { display: block; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
   #conn {
     position: fixed; left: 12px; top: 12px; padding: 4px 10px; border-radius: 999px;
     font: 12px/1.6 system-ui, sans-serif; color: #cfe; background: #1d2a30; opacity: .85;
   }
   #conn.on { background: #17403a; color: #8ff0dc; }
   #why {
-    position: fixed; left: 12px; bottom: 12px; right: 12px; padding: 8px 12px; border-radius: 8px;
+    position: fixed; left: 12px; bottom: 12px; right: 320px; padding: 8px 12px; border-radius: 8px;
     font: 12px/1.7 ui-monospace, monospace; color: #ffd9d9; background: #40191d; display: none;
     white-space: pre-wrap;
   }
@@ -22,13 +23,75 @@
     font: 12px/1.7 system-ui, sans-serif; color: #cfe; background: #1d2a30; opacity: .85;
   }
   #talk a { color: #8ff0dc; }
+
+  /* 右下角:数值面板。数都在这里,不在画布上,免得挡住她。 */
+  #panel {
+    position: fixed; right: 12px; top: 12px; width: 288px; max-height: calc(100% - 24px);
+    overflow-y: auto; padding: 10px 12px 12px; border-radius: 10px;
+    font: 12px/1.6 system-ui, sans-serif; color: #cfe; background: #16202699;
+    border: 1px solid #24343c; backdrop-filter: blur(3px);
+  }
+  #panel h2 {
+    margin: 0 0 6px; font-size: 12px; font-weight: 600; color: #8ff0dc;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  #panel h2 span { color: #9fb3bd; font-weight: 400; }
+  #panel section { margin-top: 10px; }
+  #panel .muted { color: #7d909a; }
+  .row { display: grid; grid-template-columns: 62px 1fr 44px; gap: 6px; align-items: center; }
+  .row .bar { height: 6px; border-radius: 3px; background: #22313a; overflow: hidden; }
+  .row .bar > i { display: block; height: 100%; background: #39c5bb; width: 0; }
+  .row .num { text-align: right; font: 11px/1.6 ui-monospace, monospace; color: #b7ccd4; }
+  .kv { display: flex; justify-content: space-between; gap: 8px; }
+  .kv b { font-weight: 600; color: #dff6f2; }
+  .ctl { margin-top: 8px; }
+  .ctl label { display: grid; grid-template-columns: 46px 1fr 52px; gap: 6px; align-items: center; margin-top: 4px; }
+  .ctl input[type=range] { width: 100%; }
+  .ctl .num { text-align: right; font: 11px/1.6 ui-monospace, monospace; color: #b7ccd4; }
+  .btns { display: flex; gap: 6px; margin-top: 8px; }
+  button {
+    flex: 1; padding: 5px 8px; border-radius: 6px; border: 1px solid #2c4048;
+    background: #1d2a30; color: #cfe; font: 12px/1.4 system-ui, sans-serif; cursor: pointer;
+  }
+  button:hover { background: #24343c; }
+  #channels { font: 11px/1.5 ui-monospace, monospace; color: #b7ccd4; }
+  #channels div { display: flex; justify-content: space-between; }
 </style>
 </head>
 <body>
 <canvas id="stage"></canvas>
 <div id="conn">连接中…</div>
-<div id="talk">这一页只负责她的身体。<a href="http://127.0.0.1:18790/" target="_blank">在控制台的终端页跟她说话</a>,身体会跟着动。</div>
+<div id="talk">这一页只负责她的身体。<a href="http://127.0.0.1:18790/" target="_blank">在控制台的终端页跟她说话</a>,身体会跟着动。拖动画面可以挪动她。</div>
 <div id="why"></div>
+
+<div id="panel">
+  <h2>内部状态 <span id="mood">—</span></h2>
+  <div id="bars"></div>
+
+  <section>
+    <div class="kv"><span>表情</span><b id="expression">—</b></div>
+    <div class="kv"><span>正在做</span><b id="clips">—</b></div>
+    <div class="kv"><span>说话中</span><b id="speaking">否</b></div>
+    <div class="kv"><span>连着几页</span><b id="clients">0</b></div>
+  </section>
+
+  <section>
+    <div class="ctl">
+      <label>缩放<input id="zoom" type="range" min="30" max="260" value="100"><span class="num" id="zoom-val">100%</span></label>
+      <label>左右<input id="offset-x" type="range" min="-400" max="400" value="0"><span class="num" id="offset-x-val">0</span></label>
+      <label>上下<input id="offset-y" type="range" min="-400" max="400" value="0"><span class="num" id="offset-y-val">0</span></label>
+      <div class="btns">
+        <button id="btn-reset" type="button">复位</button>
+        <button id="btn-save" type="button">记住</button>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="kv"><span>通道</span><span class="muted">此刻的值</span></div>
+    <div id="channels"></div>
+  </section>
+</div>
 
 <!-- 三个库由本扩展的渲染服务从配置的播放器库目录转发;应用脚本在 /app.js。 -->
 <script src="/lib/js/pixi.min.js"></script>

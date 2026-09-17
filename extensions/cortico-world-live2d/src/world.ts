@@ -82,6 +82,8 @@ export class Live2DWorld implements World {
   private boundPort = 0;
   /** 挂载前收到的内部状态:先记着,起服务时补上。 */
   private pendingEmotion: EmotionValues | null = null;
+  /** 六个情绪维度此刻的值:数值面板要,推流帧里带上。 */
+  private emotion: EmotionValues = EMOTION_BASELINE;
   /** 挂载前收到的心情标签;表情层用它。 */
   private pendingMood: string | null = null;
   /** 此刻的心情与它对应的表情;心情由 Persona 给,表情由 `expressions.ts` 的表定。 */
@@ -137,6 +139,7 @@ export class Live2DWorld implements World {
   setInternalState(values: EmotionValues, mood: string | null = null): void {
     this.pendingEmotion = values;
     this.pendingMood = mood;
+    this.emotion = values;
     this.performance?.setBaseline(baselineChannels(values));
     this.mood = mood;
     this.moodExpression = expressionForMood(mood, this.modelExpressions);
@@ -262,6 +265,7 @@ export class Live2DWorld implements World {
     this.performance = new Performance(this.pack, {
       stateHoldMs: this.cfg.stateHoldMs,
       stateFadeMs: this.cfg.stateFadeMs,
+      idleAmount: this.cfg.idleAmount,
     });
     // 先摆成中性:形象不该在她推来第一份状态之前是一张空表,渲染端拿不到通道就没法复位。
     this.performance.setBaseline(baselineChannels(this.pendingEmotion ?? EMOTION_BASELINE));
@@ -476,6 +480,11 @@ export class Live2DWorld implements World {
       expression,
       expressionToken: this.expressionToken,
       speaking: nowMs < this.speakingUntilMs,
+      // 面板要的那几个数:六个情绪维度、离散心情、此刻做着的片段。
+      // 页面拿它们做数值展示,不必再开一条通道。
+      emotion: this.emotion,
+      mood: this.mood,
+      clips: this.performance?.activeClips(nowMs).map((clip) => clip.clipId) ?? [],
       clients: this.clients.size,
     });
   }
