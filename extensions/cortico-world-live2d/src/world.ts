@@ -21,7 +21,9 @@ import type { OutputTap, ToolDef, World, WorldConsoleDecl, WorldHost } from 'cor
 import type { WorldContext } from 'cortico/world.ts';
 import { baselineChannels, EMOTION_BASELINE, type EmotionValues } from './baseline.ts';
 import {
+  parseModelChannelMap,
   parseParamMap,
+  repairFromModel,
   resolveChannels,
   unmappedChannels,
   verifyAgainstModel,
@@ -215,21 +217,33 @@ export class Live2DWorld implements World {
     this.mood = this.pendingMood;
     this.expression = expressionForMood(this.mood, this.modelExpressions);
 
+    // 分辨率顺序:部署覆盖 > 包的建议 > 模型自带的映射(只在建议落空时用) > 不接。
+    const modelParams = this.modelParamIds();
     this.channels = resolveChannels(this.pack, parseParamMap(this.cfg.paramMap));
+    if (modelParams !== null) {
+      const repaired = repairFromModel(this.channels, modelParams, this.modelChannelMap());
+      this.channels = repaired.channels;
+      if (repaired.repairs.length > 0) {
+        host.log.info('包里建议的参数名在这份模型上不存在,已按模型自带的映射改过来', {
+          repairs: repaired.repairs,
+        });
+      }
+    } else {
+      host.log.warn('读不到模型的参数表(FileReferences 里没有 DisplayInfo),通道与参数的对照没法核对');
+    }
+
     const unmapped = unmappedChannels(this.channels);
     if (unmapped.length > 0) {
       // 报出来而不是静默跳过:包里 `losesIfMissing` 说的就是这一刻丢了什么。
       host.log.warn('有通道没有落点(包自己说不接),这几路表演会丢', { channels: unmapped });
     }
-    // 解析得出的名字,模型未必有:这是 `suggests` 与现实差距最要紧的一处。
-    const modelParams = this.modelParamIds();
-    if (modelParams === null) {
-      host.log.warn('读不到模型的参数表(FileReferences 里没有 DisplayInfo),通道与参数的对照没法核对');
-    } else {
+    if (modelParams !== null) {
+      // 修完还落空的,是模型上真没有、作者也没配的通道。
       const notInModel = verifyAgainstModel(this.channels, modelParams);
       if (notInModel.length > 0) {
-        host.log.warn('包里建议的参数名在这份模型上不存在,这几路表演会丢;在 worlds.live2d.paramMap 里改成 '
-          + '本模型的参数名即可', { channels: notInModel });
+        host.log.warn('这几路通道在这份模型上确实没有参数,表演会丢;要接就在 worlds.live2d.paramMap 里点名', {
+          channels: notInModel,
+        });
       }
     }
 
@@ -425,6 +439,22 @@ export class Live2DWorld implements World {
     } catch (error) {
       this.host?.log.warn('读模型表情表失败,表情层不启用', { err: String(error) });
       return new Set();
+    }
+  }
+
+  /**
+   * 模型目录里那份 VTube Studio 配置(作者自己写的通道→参数对照)。
+   * 找不到就是空表——只用它补建议落空的通道,没有它照常跑。
+   */
+  private modelChannelMap(): Record<string, string> {
+    try {
+      const dir = this.resolveDir(this.cfg.modelDir, '模型');
+      const file = readdirSync(dir).find((name) => name.toLowerCase().endsWith('.vtube.json'));
+      if (!file) return {};
+      return parseModelChannelMap(JSON.parse(readFileSync(join(dir, file), 'utf8')));
+    } catch (error) {
+      this.host?.log.warn('读模型自带的通道映射失败,只用包的建议', { err: String(error) });
+      return {};
     }
   }
 

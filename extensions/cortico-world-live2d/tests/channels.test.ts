@@ -1,13 +1,21 @@
 /**
- * 通道解析:包的建议 vs 本模型的真实参数名。
+ * 通道解析:包的建议、部署的覆盖、模型自带的映射,三层各管什么。
  *
- * 用真实素材包与真实模型参数表跑——这份模型 141 个参数里有 `Paramguzui` 这种拼音命名,
- * 包里建议的 `ParamCheekPuff` 并不存在。这类不匹配必须能被看见(报出来),而不是静默失效。
+ * 用真实素材包与真实模型跑——这份模型 141 个参数里有 `Paramgulian` 这种拼音命名,
+ * 包里建议的 `ParamCheekPuff` 并不存在。这类不匹配必须被看见、且能被模型自己的配置修好,
+ * 而不是静默失效。
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveChannels, parseParamMap, unmappedChannels, verifyAgainstModel } from '../src/channels.ts';
+import {
+  parseModelChannelMap,
+  parseParamMap,
+  repairFromModel,
+  resolveChannels,
+  unmappedChannels,
+  verifyAgainstModel,
+} from '../src/channels.ts';
 import { loadPack } from '../src/pack.ts';
 
 const PACK_DIR = join(import.meta.dirname, '..', '..', '..', 'bots', 'miku', 'vtuber-pack');
@@ -24,6 +32,15 @@ function modelParams(): Set<string> | null {
     return new Set((cdi.Parameters ?? []).map((p) => p.Id));
   } catch {
     return null;
+  }
+}
+
+/** 模型自带的通道→参数对照(VTube Studio 配置);读不到就是空表。 */
+function modelMap(): Record<string, string> {
+  try {
+    return parseModelChannelMap(JSON.parse(readFileSync(join(MODEL_DIR, 'miku.vtube.json'), 'utf8')));
+  } catch {
+    return {};
   }
 }
 
@@ -82,8 +99,59 @@ describe('与真实模型对照', () => {
     expect(notInModel.map((entry) => entry.channel)).toEqual(['CheekPuff']);
     expect(notInModel[0]!.param).toBe('ParamCheekPuff');
     expect(notInModel[0]!.losesIfMissing).toContain('脸颊');
-    // 改成这款模型的拼音参数后就不再报。
-    expect(verifyAgainstModel(resolveChannels(pack, { CheekPuff: 'Paramguzui' }), params)).toEqual([]);
+    // 用部署覆盖点名后就不再报。
+    expect(verifyAgainstModel(resolveChannels(pack, { CheekPuff: 'Paramgulian' }), params)).toEqual([]);
+  });
+
+  it('模型自带的映射把建议落空的那条补上:腮接的是鼓脸,不是鼓嘴', () => {
+    const params = modelParams();
+    if (!params) return;
+    const own = modelMap();
+    expect(own.CheekPuff).toBe('Paramgulian');
+    const repaired = repairFromModel(resolveChannels(pack), params, own);
+    expect(repaired.repairs).toEqual([{ channel: 'CheekPuff', from: 'ParamCheekPuff', to: 'Paramgulian' }]);
+    expect(repaired.channels.CheekPuff!.param).toBe('Paramgulian');
+    // 补完之后,除了包自己说不接的两条,没有落空的。
+    expect(verifyAgainstModel(repaired.channels, params)).toEqual([]);
+  });
+
+  it('建议对应的参数确实存在时不看模型自带映射:那份配置是给人用的,会留笔误', () => {
+    const params = modelParams();
+    if (!params) return;
+    const own = modelMap();
+    // 这份模型的 VTube 配置把 BrowRightY 映到了 ParamBrowLAngle,而包里建议的 ParamBrowRY 真实存在。
+    expect(own.BrowRightY).toBe('ParamBrowLAngle');
+    const repaired = repairFromModel(resolveChannels(pack), params, own);
+    expect(repaired.channels.BrowRightY!.param).toBe('ParamBrowRY');
+  });
+
+  it('没有模型自带映射时,落空的通道保持原样并继续被报出来', () => {
+    const params = modelParams();
+    if (!params) return;
+    const repaired = repairFromModel(resolveChannels(pack), params, {});
+    expect(repaired.repairs).toEqual([]);
+    expect(repaired.channels.CheekPuff!.param).toBe('ParamCheekPuff');
+  });
+
+  it('模型自带的映射只认第一条,且要模型上真有那个参数', () => {
+    const own = parseModelChannelMap({
+      ParameterSettings: [
+        { Input: 'FaceAngleX', OutputLive2D: 'ParamAngleX' },
+        { Input: 'FaceAngleX', OutputLive2D: 'ParamBodyAngleX' },
+        { Input: 'MouthX', OutputLive2D: 'Paramwaizui' },
+        { Input: '', OutputLive2D: 'ParamX' },
+        { Input: 'CheekPuff', OutputLive2D: 'ParamCheekPuff' },
+      ],
+    });
+    expect(own).toEqual({ FaceAngleX: 'ParamAngleX', MouthX: 'Paramwaizui', CheekPuff: 'ParamCheekPuff' });
+    // 模型上没有映射指向的那个参数时不采用,保持原样。
+    const repaired = repairFromModel(
+      resolveChannels(pack),
+      new Set(['ParamAngleX']),
+      { CheekPuff: 'ParamGulian' },
+    );
+    expect(repaired.repairs).toEqual([]);
+    expect(repaired.channels.CheekPuff!.param).toBe('ParamCheekPuff');
   });
 
   it('包自己说不接的通道在"没有落点"名单里,不在"模型没有"名单里', () => {

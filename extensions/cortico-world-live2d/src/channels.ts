@@ -80,3 +80,61 @@ export function verifyAgainstModel(
     .filter(([, value]) => value.param !== null && !modelParams.has(value.param))
     .map(([channel, value]) => ({ channel, param: value.param!, losesIfMissing: value.losesIfMissing }));
 }
+
+export interface ChannelRepair {
+  channel: string;
+  from: string;
+  to: string;
+}
+
+/**
+ * 包里建议的参数名在这份模型上不存在时,用**模型自带**的映射补上。
+ *
+ * 多数 Live2D 模型带一份 VTube Studio 配置,里面的 `ParameterSettings` 就是作者自己写的
+ * 通道 → 参数对照,而它的输入名与包的抽象通道同名。实测这份模型:包里建议 `ParamCheekPuff`,
+ * 模型上根本不存在,作者配的是 `Paramgulian`(鼓脸)。
+ *
+ * 只在**建议落空**时才用它,不用它反过来覆盖建议:那份配置是给人用的界面文件,会留笔误
+ * (这份模型把 `BrowRightY` 映到 `ParamBrowLAngle`),而建议指向的参数确实存在时按建议走。
+ */
+export function repairFromModel(
+  channels: ResolvedChannels,
+  modelParams: ReadonlySet<string>,
+  modelMap: Readonly<Record<string, string>>,
+): { channels: ResolvedChannels; repairs: ChannelRepair[] } {
+  const repairs: ChannelRepair[] = [];
+  const out: ResolvedChannels = {};
+  for (const [channel, spec] of Object.entries(channels)) {
+    const suggested = spec.param;
+    if (suggested === null || modelParams.has(suggested)) {
+      out[channel] = spec;
+      continue;
+    }
+    const own = modelMap[channel];
+    if (own && modelParams.has(own)) {
+      repairs.push({ channel, from: suggested, to: own });
+      out[channel] = { ...spec, param: own };
+      continue;
+    }
+    out[channel] = spec;
+  }
+  return { channels: out, repairs };
+}
+
+/**
+ * 从模型的 VTube Studio 配置里读作者自己的通道 → 参数对照。
+ * 同一通道有多条(头/身分别驱动)时取第一条;没有这份配置就返回空表。
+ */
+export function parseModelChannelMap(vtube: unknown): Record<string, string> {
+  const settings = (vtube as { ParameterSettings?: Array<{ Input?: unknown; OutputLive2D?: unknown }> })
+    ?.ParameterSettings;
+  const out: Record<string, string> = {};
+  if (!Array.isArray(settings)) return out;
+  for (const entry of settings) {
+    const input = typeof entry?.Input === 'string' ? entry.Input : '';
+    const target = typeof entry?.OutputLive2D === 'string' ? entry.OutputLive2D : '';
+    if (!input || !target || out[input]) continue;
+    out[input] = target;
+  }
+  return out;
+}
