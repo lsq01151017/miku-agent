@@ -633,7 +633,8 @@ export class Live2DWorld implements World {
   private sendPage(res: ServerResponse): void {
     const html = readFileSync(join(WEB_DIR, 'index.html'), 'utf8')
       .replace('</head>', `<script>window.${MODEL_FILE_GLOBAL} = ${JSON.stringify(this.modelFile)};</script>\n</head>`);
-    res.writeHead(200, { 'Content-Type': CONTENT_TYPES['.html']! }).end(html);
+    // 页面与脚本每次都现读现发:改完源码刷新一次就是新的,不会出现"新的 app.js 配旧的 index.html"。
+    res.writeHead(200, { 'Content-Type': CONTENT_TYPES['.html']!, 'Cache-Control': 'no-store' }).end(html);
   }
 
   private sendJson(res: ServerResponse, value: unknown): void {
