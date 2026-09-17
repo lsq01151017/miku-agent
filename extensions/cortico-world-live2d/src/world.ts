@@ -1,11 +1,13 @@
 /**
  * `live2d` World:她的形象。
  *
- * 驱动有两路,合成在 `Performance` 里:
+ * 驱动有三路,合成在 `Performance` 里:
  *   - **内部状态**(题目的硬要求):Persona 通过 `setInternalState()` 把六个情绪维度推进来,
  *     这里算成通道基线。WorldHost 没有人物状态通道,所以这条线走实例上的一个可选方法;
  *     扩展没被这样用时它只是空转,不影响挂载。
  *   - **她说的话**:`outputTap` 收到正文增量,扫词表触发片段。
+ *   - **她的措辞**:同一段正文再扫一遍 `expressions.json`,命中的模型自带表情压过心情那张
+ *     (见 `directives.ts`)——台词本身就是演出指令。
  *
  * 渲染端复用已验证可加载的那套库(pixi + Cubism Core + cubism4)与模型,只换驱动协议:
  * 本 World 自己起一个小 HTTP 服务,`/state` 用 SSE 推通道值,页面把它写到模型参数上。
@@ -31,6 +33,7 @@ import {
   type ResolvedChannels,
 } from './channels.ts';
 import { loadPack, type Pack } from './pack.ts';
+import { cueExpression, missingCueExpressions, type ExpressionCue } from './directives.ts';
 import { expressionForMood, missingExpressions, MOOD_EXPRESSIONS } from './expressions.ts';
 import { Performance } from './performance.ts';
 import { LIVE2D_CONFIG_GROUP, type Live2DConfigSection } from './config.ts';
@@ -43,6 +46,8 @@ const PUSH_INTERVAL_MS = 60;
 const KEEPALIVE_MS = 15_000;
 /** 端口被占用时向上试几个。 */
 const PORT_ATTEMPTS = 5;
+/** 措辞匹配只看最近这么多字:一句话很长时,前面的词不该一直压着后面的。 */
+const SPOKEN_WINDOW_CHARS = 160;
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -81,10 +86,22 @@ export class Live2DWorld implements World {
   private pendingMood: string | null = null;
   /** 此刻的心情与它对应的表情;心情由 Persona 给,表情由 `expressions.ts` 的表定。 */
   private mood: string | null = null;
+  private moodExpression: string | null = null;
+  /** 台词命中的表情:她的措辞就是演出指令,压过心情,到期回到心情那张。 */
+  private directive: { expression: string; atMs: number } | null = null;
+  /** 这一轮她已经说出口的正文:措辞匹配按整段看,词被切在两个增量里也认得出来。 */
+  private spokenText = '';
+  /** 这一轮已经用过的指令,同一条不重复触发。 */
+  private firedCues = new Set<string>();
+  /** 推给页面的表情名与它的序号:名字没变也要能重放同一张表情,所以带序号。 */
   private expression: string | null = null;
+  private expressionToken = 0;
   /** 这份模型自带的表情名;读不到就是空集,表情层整层不启用。 */
   private modelExpressions: Set<string> = new Set();
-  private speaking = false;
+  /** 说到什么时候为止:按字数估的时长,不是音频同步。 */
+  private speakingUntilMs = 0;
+  /** 包里的措辞 → 表情指令表。 */
+  private cues: readonly ExpressionCue[] = [];
   private lastFrame = '';
   /** 起服务时定下来的模型入口文件名;配置问题在这一刻暴露,不留到有人打开页面。 */
   private modelFile = '';
@@ -122,7 +139,53 @@ export class Live2DWorld implements World {
     this.pendingMood = mood;
     this.performance?.setBaseline(baselineChannels(values));
     this.mood = mood;
-    this.expression = expressionForMood(mood, this.modelExpressions);
+    this.moodExpression = expressionForMood(mood, this.modelExpressions);
+  }
+
+  /**
+   * 她说了一句话(正文增量)。三件事:
+   *   1. 把"她在说话"延长到这句话估的时长——口型跟着这个标志动;
+   *   2. 把正文按整段攒起来,词被切在两个增量里也认得出来;
+   *   3. 扫措辞指令表,命中的表情挂上去(同一轮同一条只触发一次)。
+   */
+  private said(text: string, nowMs: number): void {
+    if (nowMs > this.speakingUntilMs) {
+      // 上一段已经说完了:这是新的一段,指令与正文都从头算。
+      this.spokenText = '';
+      this.firedCues.clear();
+    }
+    const chars = [...text].length;
+    const spanMs = Math.max(this.cfg.speechTailMs, chars * this.cfg.speechMsPerChar);
+    this.speakingUntilMs = Math.max(this.speakingUntilMs, nowMs) + spanMs;
+    this.performance?.speak(text, nowMs);
+
+    this.spokenText = (this.spokenText + text).slice(-SPOKEN_WINDOW_CHARS);
+    if (this.cfg.expressionHoldMs <= 0) return;
+    const cue = cueExpression(this.cues, this.spokenText);
+    if (cue === null || this.firedCues.has(cue)) return;
+    this.firedCues.add(cue);
+    this.directive = { expression: cue, atMs: nowMs };
+  }
+
+  /** 此刻该挂哪张表情:台词指令压过心情,指令过期就回到心情那张。 */
+  private resolvedExpression(nowMs: number): string | null {
+    if (this.directive && nowMs - this.directive.atMs < this.cfg.expressionHoldMs) {
+      return this.directive.expression;
+    }
+    return this.moodExpression;
+  }
+
+  /**
+   * 把此刻的表情名与它的序号同步一次。名字没变也要能重放同一张表情(她第二次说「害羞」),
+   * 所以除名字之外还带一个只增不减的序号,渲染端按序号决定要不要重放。
+   */
+  private syncExpression(nowMs: number): string | null {
+    const expression = this.resolvedExpression(nowMs);
+    if (expression !== this.expression) {
+      this.expression = expression;
+      this.expressionToken += 1;
+    }
+    return expression;
   }
 
   /** 渲染页的地址;服务没起来时给的是配置端口上的预期地址。 */
@@ -175,9 +238,8 @@ export class Live2DWorld implements World {
         if (event.type !== 'response.output_text.delta') return;
         const delta = event.delta ?? '';
         if (!delta) return;
-        this.speaking = true;
         // 增量直接过词表:一句话里的手势在说到那个词的时候出现,不必等整句。
-        this.performance?.speak(delta, Date.now());
+        this.said(delta, Date.now());
       },
       /**
        * 有页面在看,这段输出才算"已经外化",此后不许抢占这一轮——否则动作会说到一半被掐掉。
@@ -185,9 +247,10 @@ export class Live2DWorld implements World {
        */
       externalizes: (event) =>
         event.type === 'response.output_text.delta' && (event.delta ?? '') !== '' && this.clients.size > 0,
-      onRoundEnd: () => { this.speaking = false; },
+      // 一轮结束不立刻闭嘴:她常常分几轮说话,尾巴由 `speechTailMs` 收,免得每轮之间抽一下。
+      onRoundEnd: () => {},
       onAbort: () => {
-        this.speaking = false;
+        this.speakingUntilMs = 0;
         this.performance?.clear();
       },
     };
@@ -218,8 +281,19 @@ export class Live2DWorld implements World {
     if (absent.length > 0) {
       host.log.warn('心情表里提到的表情这份模型没有,那几个心情只走通道基线', { missing: absent });
     }
+    this.cues = this.pack.cues;
+    if (this.cues.length === 0) {
+      host.log.info('素材包没有 expressions.json,台词不切表情,只走心情那层');
+    } else if (this.modelExpressions.size > 0) {
+      const missingCues = missingCueExpressions(this.cues, this.modelExpressions);
+      if (missingCues.length > 0) {
+        host.log.warn('措辞表里提到的表情这份模型没有,说到那些词不会有表情', { missing: missingCues });
+      }
+      // 模型上没有的表情名不进推流帧:渲染端照名字挂,挂不上的名字只会白白多一次失败。
+      this.cues = this.cues.filter((cue) => this.modelExpressions.has(cue.expression));
+    }
     this.mood = this.pendingMood;
-    this.expression = expressionForMood(this.mood, this.modelExpressions);
+    this.moodExpression = expressionForMood(this.mood, this.modelExpressions);
 
     // 分辨率顺序:部署覆盖 > 包的建议 > 模型自带的映射(只在建议落空时用) > 不接。
     const modelParams = this.modelParamIds();
@@ -275,7 +349,9 @@ export class Live2DWorld implements World {
   }
 
   onTurnEnded(): void {
-    this.speaking = false;
+    this.speakingUntilMs = 0;
+    this.spokenText = '';
+    this.firedCues.clear();
   }
 
   onHandoffEnded(): void {
@@ -313,10 +389,14 @@ export class Live2DWorld implements World {
         return this.sendJson(res, this.paramOverrides);
       }
       if (url.pathname === '/pack/expressions.json') {
+        const current = this.syncExpression(Date.now());
         return this.sendJson(res, {
           available: [...this.modelExpressions].sort(),
           moodMap: MOOD_EXPRESSIONS,
-          current: this.expression,
+          cues: this.cues,
+          current,
+          expressionToken: this.expressionToken,
+          mood: this.mood,
         });
       }
       if (url.pathname === '/state') return this.openStream(res);
@@ -380,18 +460,22 @@ export class Live2DWorld implements World {
   // ── 推流 ────────────────────────────────────────────────────────────────────
 
   private frame(): string {
-    const raw = this.performance?.channelsAt(Date.now()) ?? {};
+    const nowMs = Date.now();
+    const raw = this.performance?.channelsAt(nowMs) ?? {};
     // 包的约定与模型参数的约定不一致时,在合成之后、裁剪之前补上偏移(例:眼睛的"0=平常睁眼"
     // 对不上参数的"1=睁眼")。
     const channels: Record<string, number> = { ...raw };
     for (const [channel, offset] of Object.entries(this.paramOffset)) {
       channels[channel] = (channels[channel] ?? 0) + offset;
     }
+    // 表情名没变也要能重放(同一张表情说两次),所以另给一个序号:变了才重新淡入。
+    const expression = this.syncExpression(nowMs);
     return JSON.stringify({
       channels,
       // 表情与通道写的是不相交的参数组,渲染端两样都照做。
-      expression: this.expression,
-      speaking: this.speaking,
+      expression,
+      expressionToken: this.expressionToken,
+      speaking: nowMs < this.speakingUntilMs,
       clients: this.clients.size,
     });
   }
@@ -405,7 +489,8 @@ export class Live2DWorld implements World {
     const payload = this.frame();
     const changed = payload !== this.lastFrame;
     this.lastFrame = payload;
-    if (!changed && !this.speaking) return;
+    // 说话与否也在帧里,所以"她闭嘴了"本身就是一次变化,不必另外造帧。
+    if (!changed) return;
     const chunk = `data: ${payload}\n\n`;
     for (const client of this.clients) {
       try { client.write(chunk); } catch { this.clients.delete(client); }

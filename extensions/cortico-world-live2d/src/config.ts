@@ -46,6 +46,12 @@ export interface Live2DConfigSection extends WorldSection {
   stateHoldMs: number;
   /** 淡出时长。 */
   stateFadeMs: number;
+  /** 措辞命中的表情保持多久;过期回到心情对应的表情。 */
+  expressionHoldMs: number;
+  /** 一段话说完后口型至少再动多久。 */
+  speechTailMs: number;
+  /** 按字数估的说话速度(毫秒/字);口型与"她在说话"的时长用它。 */
+  speechMsPerChar: number;
 }
 
 export const LIVE2D_DEFAULTS: Live2DConfigSection = {
@@ -60,6 +66,9 @@ export const LIVE2D_DEFAULTS: Live2DConfigSection = {
   paramOverrides: '',
   stateHoldMs: 25_000,
   stateFadeMs: 8_000,
+  expressionHoldMs: 9_000,
+  speechTailMs: 600,
+  speechMsPerChar: 130,
 };
 
 export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
@@ -131,6 +140,30 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         maximum: 120_000,
         'x-suffix': 'ms',
         description: '淡出用的时间;太短会显得抽一下。',
+      },
+      'expressionHoldMs': {
+        type: 'integer',
+        title: '台词表情保持',
+        minimum: 0,
+        maximum: 600_000,
+        'x-suffix': 'ms',
+        description: '她的话命中表情指令后挂多久。过期回到心情对应的表情;写成 0 就是不按措辞切表情。',
+      },
+      'speechTailMs': {
+        type: 'integer',
+        title: '口型最短时长',
+        minimum: 0,
+        maximum: 60_000,
+        'x-suffix': 'ms',
+        description: '一段话说完后口型至少再动的时长,也是极短一句话的下限。',
+      },
+      'speechMsPerChar': {
+        type: 'integer',
+        title: '说话速度',
+        minimum: 10,
+        maximum: 2000,
+        'x-suffix': 'ms/字',
+        description: '按字数估这段话说出来要多久;口型动的时长按它算。没有语音合成,这是估算不是唇形同步。',
       },
     },
   },

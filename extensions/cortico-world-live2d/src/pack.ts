@@ -1,9 +1,10 @@
 /**
  * vtuber-pack 的读取与校验。三个文件是一份**素材包**,不是代码:
  *
- *   params.json  抽象通道:名字、单位、量程、建议接的模型参数、缺了会丢什么
- *   clips.json   片段,三种形状——pulse(关键帧)、sustain(保持值 + 待机噪声)、gaze(视线目标)
- *   vocab.json   中文词 → 片段,带生命周期与强度;aliases 把说法归到同一个词
+ *   params.json     抽象通道:名字、单位、量程、建议接的模型参数、缺了会丢什么
+ *   clips.json      片段,三种形状——pulse(关键帧)、sustain(保持值 + 待机噪声)、gaze(视线目标)
+ *   vocab.json      中文词 → 片段,带生命周期与强度;aliases 把说法归到同一个词
+ *   expressions.json 措辞 → 模型自带表情名的指令表(可选:没有这份文件就是没有这一层)
  *
  * 通道名是抽象层:包说 `FaceAngleZ`,模型接的是 `ParamAngleZ`。换模型只换映射,不动片段。
  *
@@ -12,6 +13,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { parseCues, type ExpressionCue } from './directives.ts';
 
 export interface ChannelSpec {
   unit: string;
@@ -72,6 +74,8 @@ export interface Pack {
   params: Readonly<Record<string, ChannelSpec>>;
   clips: ClipGroups;
   vocab: { entries: readonly VocabEntry[]; aliases: Readonly<Record<string, string>> };
+  /** 措辞 → 表情的指令表;包不带这份文件时是空表,这一层整层不启用。 */
+  cues: readonly ExpressionCue[];
   /** vocab 提到、clips 里没有的片段名。 */
   missingClipIds: readonly string[];
 }
@@ -96,11 +100,21 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, 'utf8')) as T;
 }
 
+/** 可选文件:读不到就是"这份包没有这一层",不是错误。 */
+function readJsonIfPresent(path: string): unknown {
+  try {
+    return readJson<unknown>(path);
+  } catch {
+    return null;
+  }
+}
+
 export function loadPack(dir: string): Pack {
   const params = readJson<Record<string, ChannelSpec>>(join(dir, 'params.json'));
   const clips = readJson<ClipGroups>(join(dir, 'clips.json'));
   const raw = readJson<{ entries: VocabEntry[]; aliases?: Record<string, string> }>(join(dir, 'vocab.json'));
   const vocab = { entries: raw.entries ?? [], aliases: raw.aliases ?? {} };
+  const cues = parseCues(readJsonIfPresent(join(dir, 'expressions.json')));
 
   const known = new Set([
     ...Object.keys(clips.pulse ?? {}),
@@ -113,6 +127,7 @@ export function loadPack(dir: string): Pack {
     params,
     clips: { pulse: clips.pulse ?? {}, sustain: clips.sustain ?? {}, gaze: clips.gaze ?? {} },
     vocab,
+    cues,
     missingClipIds,
   };
 }

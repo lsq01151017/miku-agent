@@ -32,8 +32,11 @@
   var speaking = false;
   var speakStart = 0;
   var lastExpression = null;
+  var lastExpressionToken = -1;
   // 不归通道管的参数定值(例如模型的水印开关),每帧照写一次,免得被表情或动作改回去。
   var overrides = {};
+  // 模型自己的眨眼参数:这几路的开合归眨眼逻辑,通道值只在它上面叠加,不覆盖它。
+  var blinkParams = {};
 
   function fit() {
     if (!app) return;
@@ -80,27 +83,43 @@
     model.scale.set(scale);
     model.anchor.set(0.5, 0.5);
     model.position.set(window.innerWidth / 2, window.innerHeight / 2);
-    // Cubism 每帧会把参数复位成模型默认值,所以定值必须写在复位之后、更新之前。
-    // 只在自己的 rAF 里写是不够的:两者顺序不定,写早了当帧就被复位掉。
+    blinkParams = blinkParameters(model.internalModel);
+    // Cubism 每帧会把参数复位成模型默认值,所以写参数只有一个正确的时刻:模型复位之后、
+    // 更新之前(`beforeModelUpdate`)。自己的 rAF 与模型更新没有固定先后,写早了当帧就被抹掉。
     if (model.internalModel && typeof model.internalModel.on === 'function') {
-      model.internalModel.on('beforeModelUpdate', writeOverrides);
+      model.internalModel.on('beforeModelUpdate', writeFrame);
     }
     window.addEventListener('resize', fit);
     tick();
     listen();
   }
 
-  /** 参数定值(例如水印开关);挂在模型的 beforeModelUpdate 上,每帧一次。 */
-  function writeOverrides() {
-    if (!model || !model.internalModel) return;
-    var core = model.internalModel.coreModel;
-    Object.keys(overrides).forEach(function (param) {
-      try { core.setParameterValueById(param, overrides[param]); } catch (e) { /* 模型没有这条参数 */ }
-    });
+  /**
+   * 模型自己的眨眼参数。这几个参数的每一帧值由眨眼逻辑算出,通道只能在它上面叠加:
+   * 直接覆盖就等于把眨眼关掉,那比没有表情更像一张假脸。
+   */
+  function blinkParameters(internal) {
+    var ids = {};
+    try {
+      var groups = (internal.settings && internal.settings.groups) || [];
+      for (var i = 0; i < groups.length; i++) {
+        if (groups[i] && groups[i].Name === 'EyeBlink') {
+          (groups[i].Ids || []).forEach(function (id) { ids[id] = true; });
+        }
+      }
+      var blink = internal.eyeBlink && internal.eyeBlink.parameterIds;
+      if (blink) blink.forEach(function (id) { ids[id] = true; });
+    } catch (e) { /* 读不到就按"没有眨眼参数"处理 */ }
+    return ids;
   }
 
-  /** 把通道值写到参数上;模型没有的参数(缺件)静默跳过,那正是 losesIfMissing 说的。 */
-  function apply() {
+  /**
+   * 每帧写一次参数:通道值 + 参数定值。
+   *
+   * 模型没有的参数(缺件)静默跳过,那正是 `losesIfMissing` 说的。眨眼参数走加法,
+   * 其余走赋值。
+   */
+  function writeFrame() {
     if (!model || !model.internalModel) return;
     var core = model.internalModel.coreModel;
     var mouthOpen = 0;
@@ -115,13 +134,20 @@
       var value = channel === 'MouthOpen' ? mouthOpen : current[channel];
       var range = channelRange[channel];
       if (range) value = Math.min(range[1], Math.max(range[0], value));
-      try { core.setParameterValueById(param, value); } catch (e) { /* 模型没有这条参数 */ }
+      try {
+        if (blinkParams[param]) {
+          core.setParameterValueById(param, core.getParameterValueById(param) + value);
+        } else {
+          core.setParameterValueById(param, value);
+        }
+      } catch (e) { /* 模型没有这条参数 */ }
     });
-    // 兜底:即使模型没有 beforeModelUpdate 这个钩子,也在自己的帧里写一次。
-    writeOverrides();
+    Object.keys(overrides).forEach(function (param) {
+      try { core.setParameterValueById(param, overrides[param]); } catch (e) { /* 同上 */ }
+    });
   }
 
-  /** 每帧把当前值往目标值推一点:通道是"想让它怎样",动作才像动作。 */
+  /** 平滑在自己的帧里推进:通道是"想让它怎样",动作才像动作。写参数不在这一刻。 */
   function tick() {
     Object.keys(target).forEach(function (channel) {
       if (channel === 'MouthOpen') return; // 口型归说话,不跟通道
@@ -129,7 +155,6 @@
       var from = current[channel] === undefined ? 0 : current[channel];
       current[channel] = from + (to - from) * 0.18;
     });
-    apply();
     requestAnimationFrame(tick);
   }
 
@@ -149,19 +174,21 @@
       var nowSpeaking = Boolean(payload.speaking);
       if (nowSpeaking && !speaking) speakStart = performance.now();
       speaking = nowSpeaking;
-      applyExpression(payload.expression || null);
+      applyExpression(payload.expression || null, payload.expressionToken);
     };
   }
 
   /**
-   * 表情层:World 按心情给出模型自带的表情名。
+   * 表情层:World 给出此刻该挂的那张模型自带表情——先是她台词命中的,过期回到心情那张。
    *
    * 表情与通道写的是不相交的参数组(表情只写 Param125/Param130-137),所以两样都照做,
-   * 谁也不覆盖谁。只在变化时调一次,免得每帧重放同一段淡入。
+   * 谁也不覆盖谁。名字与序号都比一遍:同一张表情说第二次时名字没变,序号变了,那也要重放。
    */
-  function applyExpression(name) {
-    if (name === lastExpression) return;
+  function applyExpression(name, token) {
+    var stamp = token === undefined ? null : token;
+    if (name === lastExpression && stamp === lastExpressionToken) return;
     lastExpression = name;
+    lastExpressionToken = stamp;
     try {
       if (!model || typeof model.expression !== 'function') return;
       if (name) {

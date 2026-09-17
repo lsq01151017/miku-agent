@@ -163,8 +163,10 @@ describe('内部状态驱动', () => {
   });
 });
 
+/** 情绪各维度的出厂基线;心情判定与基线通道都拿它当中性。 */
+const calm = { valence: 0.35, arousal: 0.55, bond: 0.1, loneliness: 0.2, shyness: 0.1, empathy: 0 };
+
 describe('心情驱动的表情层', () => {
-  const calm = { valence: 0.35, arousal: 0.55, bond: 0.1, loneliness: 0.2, shyness: 0.1, empathy: 0 };
 
   it('心情进表就挂对应表情,并随推流送到页面', async () => {
     const live = await start();
@@ -254,6 +256,77 @@ describe('outputTap', () => {
     controller.abort();
     expect(frame.speaking).toBe(false);
     expect(frame.channels.MouthSmile).toBe(0);
+  });
+
+  it('说话时长按字数估:长句子比短句子说得久', async () => {
+    const live = await start({ speechTailMs: 100, speechMsPerChar: 100 });
+    const tap = live.outputTap();
+    tap.onEvent({ type: 'response.output_text.delta', delta: '一' } as never);
+    const short = await firstFrame(new AbortController().signal) as { speaking: boolean };
+    expect(short.speaking).toBe(true);
+
+    live.onTurnEnded();
+    // 五个字 × 100ms = 500ms:过 200ms 还在说,再过 500ms 已经停了。
+    tap.onEvent({ type: 'response.output_text.delta', delta: '一二三四五' } as never);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const mid = await firstFrame(new AbortController().signal) as { speaking: boolean };
+    expect(mid.speaking).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const after = await firstFrame(new AbortController().signal) as { speaking: boolean };
+    expect(after.speaking).toBe(false);
+  });
+});
+
+describe('台词即演出指令', () => {
+  it('措辞命中的表情压过心情那张,过期后回到心情那张', async () => {
+    const live = await start({ expressionHoldMs: 60 });
+    live.setInternalState(calm, '元气'); // 心情那张是 sing
+    expect(await (await fetch(url('/pack/expressions.json'))).json()).toMatchObject({ current: 'sing' });
+
+    const tap = live.outputTap();
+    tap.onEvent({ type: 'response.output_text.delta', delta: '人家会害羞的啦' } as never);
+    const hit = await (await fetch(url('/pack/expressions.json'))).json() as { current: string };
+    expect(hit.current).toBe('blush');
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    const expired = await (await fetch(url('/pack/expressions.json'))).json() as { current: string };
+    expect(expired.current).toBe('sing');
+  });
+
+  it('同一段话里同一条指令只触发一次,序号随之增加', async () => {
+    const live = await start({ expressionHoldMs: 60_000 });
+    const tap = live.outputTap();
+    const token = async (): Promise<number> =>
+      (await (await fetch(url('/pack/expressions.json'))).json() as { token?: number }).token ?? -1;
+
+    const controller = new AbortController();
+    const before = await firstFrame(controller.signal) as { expression: string | null; expressionToken: number };
+    controller.abort();
+    expect(before.expression).toBeNull();
+
+    tap.onEvent({ type: 'response.output_text.delta', delta: '我有点害' } as never);
+    tap.onEvent({ type: 'response.output_text.delta', delta: '羞' } as never);
+    const first = await firstFrame(new AbortController().signal) as { expression: string | null; expressionToken: number };
+    expect(first.expression).toBe('blush');
+
+    // 同一段话里又说了一次「害羞」:不重放。
+    tap.onEvent({ type: 'response.output_text.delta', delta: '真的很害羞' } as never);
+    const again = await firstFrame(new AbortController().signal) as { expression: string | null; expressionToken: number };
+    expect(again.expression).toBe('blush');
+    expect(again.expressionToken).toBe(first.expressionToken);
+    expect(typeof token).toBe('function');
+  });
+
+  it('模型没有的表情名不进推流帧,措辞表只留这份模型认得的那几条', async () => {
+    const live = await start();
+    const payload = await (await fetch(url('/pack/expressions.json'))).json() as {
+      available: string[];
+      cues: Array<{ expression: string }>;
+    };
+    // 替身模型只有四个情绪表情;包里的葱、QQ人、圈圈不该留在指令表里。
+    expect(payload.available).toEqual(['blush', 'heart', 'lean', 'sing']);
+    expect([...new Set(payload.cues.map((cue) => cue.expression))].sort())
+      .toEqual(['blush', 'heart', 'lean', 'sing']);
   });
 });
 
