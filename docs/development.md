@@ -23,6 +23,16 @@ Node 22+,pnpm 11(版本由 `package.json` 的 `packageManager` 指定)。规则�
 使用测试、`pnpm typecheck` 或 `scratch/` 下的脚本验证改动,禁止为验证而启动真实 bot。
 假数据控制台随四个内建 World 一起删掉了;要看控制台就起一个部署,或看控制台的测试。
 
+扩展是 `file:` 依赖:启动器从 `extensions/node_modules/<包名>` 读它,不是读 `extensions/<包名>`
+源码目录。改完扩展源码要重装一次快照,否则跑起来的是上一次装的那一份:
+
+```bash
+cd extensions && pnpm install --ignore-scripts --ignore-workspace
+```
+
+`--ignore-workspace` 不能省,否则根 lockfile 会多出一个 importer;`file:` 依赖会被缓存,
+必要时先删掉 `extensions/node_modules`。
+
 ## 两份 tsconfig
 
 Node 侧与浏览器侧分别配置类型库:`tsconfig.json` 排掉 `src/web/client/**`、`src/web/shared/**`、
