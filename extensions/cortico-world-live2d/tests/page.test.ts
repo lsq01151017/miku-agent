@@ -13,7 +13,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 
-interface Written { param: string; value: number }
+interface Written { param: string; value: number; added?: boolean }
 interface FakeNode {
   id: string;
   className: string;
@@ -36,6 +36,8 @@ function stubBrowser(): {
   nodes: Map<string, FakeNode>;
   stored: string[];
   instances: Array<{ onmessage: ((event: { data: string }) => void) | null }>;
+  /** 触发 window 上的事件(页面用它接指针)。 */
+  fireWindow: (type: string, event: Record<string, unknown>) => void;
   /** 跑 n 帧:每帧先走页面的 requestAnimationFrame,再走模型的 beforeModelUpdate。 */
   pump: (frames: number) => void;
 } {
@@ -48,6 +50,7 @@ function stubBrowser(): {
   const instances: Array<{ onmessage: ((event: { data: string }) => void) | null }> = [];
   let pending: (() => void) | null = null;
   let beforeModelUpdate: (() => void) | null = null;
+  let fakeNowMs = 0;
   const blink = 0.8;
 
   const makeNode = (id: string): FakeNode => {
@@ -82,6 +85,7 @@ function stubBrowser(): {
       },
       coreModel: {
         setParameterValueById: (param: string, value: number) => written.push({ param, value }),
+        addParameterValueById: (param: string, value: number) => written.push({ param, value, added: true }),
         getParameterValueById: () => blink,
       },
       on: (event: string, handler: () => void) => {
@@ -93,17 +97,24 @@ function stubBrowser(): {
 
   const globals = globalThis as Record<string, unknown>;
   // 这些全局会一直被后面的测试文件用到:进来之前先存一份,跑完原样还回去。
-  for (const key of ['document', 'window', 'requestAnimationFrame', 'PIXI', 'fetch', 'EventSource']) {
+  for (const key of ['document', 'window', 'requestAnimationFrame', 'PIXI', 'fetch', 'EventSource', 'performance']) {
     if (!saved.has(key)) saved.set(key, globals[key]);
   }
+  globals.performance = { now: () => fakeNowMs };
   globals.document = {
     getElementById: (id: string) => nodeFor(id),
     createElement: (tag: string) => makeNode(tag),
   };
+  const windowHandlers: Record<string, Array<(event: Record<string, unknown>) => void>> = {};
   globals.window = {
     innerWidth: 800,
     innerHeight: 600,
-    addEventListener: () => {},
+    addEventListener: (type: string, fn: (event: Record<string, unknown>) => void) => {
+      (windowHandlers[type] = windowHandlers[type] ?? []).push(fn);
+    },
+    fire: (type: string, event: Record<string, unknown>) => {
+      for (const fn of windowHandlers[type] ?? []) fn(event);
+    },
     localStorage: {
       getItem: () => null,
       setItem: (_key: string, value: string) => { stored.push(value); },
@@ -135,8 +146,13 @@ function stubBrowser(): {
 
   return {
     written, expressions, scales, positions, nodes, stored, instances,
+    fireWindow: (type: string, event: Record<string, unknown>) => {
+      for (const fn of windowHandlers[type] ?? []) fn(event);
+    },
     pump: (frames: number) => {
       for (let i = 0; i < frames; i++) {
+        // 每帧推进 16.7ms:页面按时间常数做的逼近必须看到真实的时间间隔。
+        fakeNowMs += 16.7;
         const callback = pending;
         pending = null;
         callback?.();
@@ -247,6 +263,25 @@ describe('播放器页面', () => {
     expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 400, y: 300 });
     expect(node('zoom-val').textContent).toBe('100%');
     expect(node('offset-x-val').textContent).toBe('0');
+
+    // ── 眼神跟随:只眼睛和一点头,身体一律不碰 ─────────────────────────────
+    stubs.written.length = 0;
+    stubs.fireWindow('pointermove', { clientX: 800, clientY: 300 });
+    stubs.pump(8); // 8 帧 ≈ 134ms:时间常数 0.08s,足够走到七成以上
+    const eyed = stubs.written.filter((entry) => entry.param === 'ParamEyeBallX');
+    expect(eyed.length).toBeGreaterThan(0);
+    // 跟得上:推到最右,不到 0.15 秒就该走过七成。
+    expect(eyed[eyed.length - 1]!.value).toBeGreaterThan(0.6);
+    // 叠加在通道值上,不是覆盖。
+    expect(eyed[eyed.length - 1]!.added).toBe(true);
+    // 腰不跟着鼠标转:身体参数一个都不写。
+    expect(stubs.written.some((entry) => entry.param.indexOf('ParamBodyAngle') === 0)).toBe(false);
+
+    // 指针离开窗口:看回正前方。
+    stubs.fireWindow('pointerleave', {});
+    stubs.pump(25);
+    const back = stubs.written.filter((entry) => entry.param === 'ParamEyeBallX').pop()!;
+    expect(Math.abs(back.value)).toBeLessThan(0.1);
 
     // ── 表情按序号重放 ──────────────────────────────────────────────────────
     send({ channels: { MouthSmile: 0.5 }, expression: 'blush', expressionToken: 1, speaking: false });

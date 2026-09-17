@@ -1,9 +1,9 @@
 /**
  * 渲染端:连上 World 的 `/state` 推流,把通道值写到 Live2D 模型上;右下角是同一份数据的数值面板。
  *
- * 分工是清楚的:**World 算通道值**(内部状态 + 词表片段 + 待机动作),这里只做四件事——
+ * 分工是清楚的:**World 算通道值**(内部状态 + 词表片段 + 待机动作),这里只做五件事——
  * 把抽象通道名按素材包的 `suggests` 映到模型参数、把突变平滑成动作、在说话时对口型、
- * 把此刻的数值照实显示出来(情绪六维、心情、表情、正在做的片段、通道值)。
+ * 让眼睛跟着指针(只眼睛和一点头,不碰身体)、把此刻的数值照实显示出来。
  *
  * 口型是按说话时长跑的振荡,**不是音频同步**:没有语音合成就没有音素时间轴,
  * 说成"唇形同步"是撒谎。说话一停它就回到基线。
@@ -14,6 +14,19 @@
   'use strict';
 
   var VIEW_KEY = 'cortico.live2d.view';
+
+  /**
+   * 眼神跟随的时间常数(秒):指针一动,眼睛按这个时间常数指数逼近。
+   *
+   * 不用 pixi 的 `autoInteract`。它把指针映射成从模型中心出发的**角度**,目标点永远落在单位圆上
+   * (看哪儿都是满偏),再用速度上限约 0.6/秒的物理逼近,满量程要 1.6 秒才到——又慢又不像在看你;
+   * 它还会写 `ParamBodyAngleX`,于是腰跟着鼠标转。这里自己算:按**指针位置**给偏移(看着她的脸
+   * 就是看正前方)、指数逼近、只写眼睛和一点头,身体不动。
+   */
+  var LOOK_TAU_SEC = 0.08;
+  /** 眼神跟随的幅度:眼睛满偏,头只跟一点。 */
+  var LOOK_EYE_RANGE = 1;
+  var LOOK_HEAD_DEG = 6;
 
   /** 情绪六维的中文名;与 `bots/miku/persona/emotion.ts` 的维度同键。 */
   var EMOTION_LABELS = {
@@ -68,6 +81,10 @@
   var view = { zoom: 1, x: 0, y: 0 };
   var fitScale = 1;
   var dragging = null;
+  // 眼神跟随:目标来自指针位置,当前值指数逼近它。
+  var look = { x: 0, y: 0, targetX: 0, targetY: 0 };
+  var lookParams = null;
+  var lastTickMs = 0;
   var barFill = {};
   var barNum = {};
   var channelRows = {};
@@ -169,6 +186,37 @@
     }
   }
 
+  /**
+   * 眼神跟随的输入:指针在页面上的位置,折算成模型中心出发的 [-1,1] 偏移。
+   *
+   * 用整页而不是画布:鼠标移到面板上她也该看过去;指针离开窗口就慢慢看回正前方。
+   */
+  function bindLook() {
+    var onMove = function (event) {
+      if (typeof event.clientX !== 'number') return;
+      var halfW = Math.max(1, window.innerWidth / 2);
+      var halfH = Math.max(1, window.innerHeight / 2);
+      look.targetX = Math.max(-1, Math.min(1, (event.clientX - window.innerWidth / 2) / halfW));
+      look.targetY = Math.max(-1, Math.min(1, (event.clientY - window.innerHeight / 2) / halfH));
+    };
+    var onLeave = function () { look.targetX = 0; look.targetY = 0; };
+    if (window.addEventListener) {
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerleave', onLeave);
+      window.addEventListener('blur', onLeave);
+    }
+  }
+
+  /** 眼神跟随的参数名:由通道表决定(换模型只换映射),缺了就用 Cubism 的通用名。 */
+  function resolveLookParams() {
+    return {
+      eyeX: channelParam.EyeRightX || 'ParamEyeBallX',
+      eyeY: channelParam.EyeRightY || 'ParamEyeBallY',
+      headX: channelParam.FaceAngleX || 'ParamAngleX',
+      headY: channelParam.FaceAngleY || 'ParamAngleY',
+    };
+  }
+
   /** 情绪六维的行:一条一次建好,之后只改宽度与数字。 */
   function buildBars() {
     if (!el.bars) return;
@@ -259,7 +307,8 @@
 
     var modelUrl = '/model/' + encodeURIComponent(window.__DSH_MODEL_FILE__ || '');
     try {
-      model = await PIXI.live2d.Live2DModel.from(modelUrl, { autoInteract: true });
+      // 关掉 pixi 自带的指针交互:眼神跟随我们自己算(见 LOOK_TAU_SEC 那段),否则腰会跟着鼠标转。
+      model = await PIXI.live2d.Live2DModel.from(modelUrl, { autoInteract: false });
     } catch (e) {
       why('模型加载失败:' + e.message + '\n检查 worlds.live2d.modelDir。');
       return;
@@ -268,8 +317,10 @@
     fitScale = Math.min(window.innerWidth / model.width, window.innerHeight / model.height);
     model.anchor.set(0.5, 0.5);
     blinkParams = blinkParameters(model.internalModel);
+    lookParams = resolveLookParams();
     applyTransform();
     bindControls();
+    bindLook();
     // Cubism 每帧会把参数复位成模型默认值,所以写参数只有一个正确的时刻:模型复位之后、
     // 更新之前(`beforeModelUpdate`)。自己的 rAF 与模型更新没有固定先后,写早了当帧就被抹掉。
     if (model.internalModel && typeof model.internalModel.on === 'function') {
@@ -300,10 +351,10 @@
   }
 
   /**
-   * 每帧写一次参数:通道值 + 参数定值。
+   * 每帧写一次参数:通道值 + 眼神跟随 + 参数定值。
    *
-   * 模型没有的参数(缺件)静默跳过,那正是 `losesIfMissing` 说的。眨眼参数走加法,
-   * 其余走赋值。
+   * 模型没有的参数(缺件)静默跳过,那正是 `losesIfMissing` 说的。眨眼参数与眼神跟随走加法
+   * (叠加在通道值上),其余走赋值。
    */
   function writeFrame() {
     if (!model || !model.internalModel) return;
@@ -328,13 +379,40 @@
         }
       } catch (e) { /* 模型没有这条参数 */ }
     });
+    // 眼神跟随:眼睛满偏,头只跟一点。不写身体参数——腰不跟着鼠标转。
+    if (lookParams) {
+      addParam(core, lookParams.eyeX, look.x * LOOK_EYE_RANGE);
+      addParam(core, lookParams.eyeY, -look.y * LOOK_EYE_RANGE);
+      addParam(core, lookParams.headX, look.x * LOOK_HEAD_DEG);
+      addParam(core, lookParams.headY, -look.y * LOOK_HEAD_DEG);
+    }
     Object.keys(overrides).forEach(function (param) {
       try { core.setParameterValueById(param, overrides[param]); } catch (e) { /* 同上 */ }
     });
   }
 
-  /** 平滑在自己的帧里推进:通道是"想让它怎样",动作才像动作。写参数不在这一刻。 */
+  /** 在模型当前值上叠加一个偏移;模型没有这条参数就跳过。 */
+  function addParam(core, param, value) {
+    if (!param || value === 0) return;
+    try {
+      if (typeof core.addParameterValueById === 'function') core.addParameterValueById(param, value);
+      else core.setParameterValueById(param, core.getParameterValueById(param) + value);
+    } catch (e) { /* 模型没有这条参数 */ }
+  }
+
+  /**
+   * 平滑在自己的帧里推进:通道是"想让它怎样",动作才像动作。写参数不在这一刻。
+   *
+   * 眼神跟随按**时间常数**逼近(与帧率无关),不用固定步长——固定步长在 30fps 上就慢一半。
+   */
   function tick() {
+    var now = performance.now();
+    var dt = lastTickMs === 0 ? 0.016 : Math.min(0.1, (now - lastTickMs) / 1000);
+    lastTickMs = now;
+    var ease = 1 - Math.exp(-dt / LOOK_TAU_SEC);
+    look.x += (look.targetX - look.x) * ease;
+    look.y += (look.targetY - look.y) * ease;
+
     Object.keys(target).forEach(function (channel) {
       if (channel === 'MouthOpen') return; // 口型归说话,不跟通道
       var to = target[channel];
