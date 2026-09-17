@@ -38,5 +38,6 @@ export { PERFORMANCE_DEFAULTS, Performance } from './performance.ts';
 export type { ActiveClip, ChannelValues, PerformanceOptions } from './performance.ts';
 export { baselineChannels, DEFAULT_BASELINE_WEIGHTS, EMOTION_BASELINE } from './baseline.ts';
 export type { BaselineWeights, EmotionValues } from './baseline.ts';
+export { expressionForMood, missingExpressions, MOOD_EXPRESSIONS } from './expressions.ts';
 
 export default LIVE2D;

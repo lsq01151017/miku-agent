@@ -16,7 +16,7 @@ import {
   MIKU_TOOL_PROTOCOL_CONFIG_GROUP,
 } from './persona/config.ts';
 import type { MemoCaps } from './persona/memoTiers.ts';
-import type { Values } from './persona/emotion.ts';
+import type { Values, Mood } from './persona/emotion.ts';
 import type { DreamPolicy } from './persona/persona.ts';
 import type { ContextStagePolicy } from '../cormini/persona/persona.ts';
 
@@ -36,12 +36,13 @@ const DECLARES: readonly WorldDeclaration[] = ['terminal', 'live2d'];
  *
  * World 扩展的形状归它自己的包,人格包只知道"有个 live2d 渠道,它可能收内部状态",
  * 所以这里按可选方法问一句:扩展没装或没这个方法是空转,不影响挂载。
+ * 连续值给通道基线,离散心情给表情层。
  */
-function emotionSink(worlds: readonly World[]): (values: Values) => void {
+function emotionSink(worlds: readonly World[]): (values: Values, mood: Mood) => void {
   const live2d = worlds.find((world) => world.id === 'live2d') as
-    | { setInternalState?: (values: Values) => void }
+    | { setInternalState?: (values: Values, mood: Mood) => void }
     | undefined;
-  return (values) => live2d?.setInternalState?.(values);
+  return (values, mood) => live2d?.setInternalState?.(values, mood);
 }
 
 export interface MikuConfig extends CoreConfig {

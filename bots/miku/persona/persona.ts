@@ -29,6 +29,7 @@ import {
   emotionSnapshot,
   initialEmotion,
   type EmotionState,
+  type Mood,
   type Values,
 } from './emotion.ts';
 import { MemoTiers, type MemoCaps } from './memoTiers.ts';
@@ -87,9 +88,9 @@ export interface MikuOptions extends CorminiOptions {
   timezone?: () => string;
   /**
    * 情绪变化时通知外面。形象层靠它拿到内部状态——那是「身体由内部状态驱动」那条线。
-   * 没人接时只是一个空转的回调。
+   * 连续值走通道基线,离散心情走表情层,所以两个都给。没人接时只是一个空转的回调。
    */
-  onEmotion?: (values: Values) => void;
+  onEmotion?: (values: Values, mood: Mood) => void;
 }
 
 /** 梦留下的浮现只留最近几条:它是反射,不是流水账。 */
@@ -105,7 +106,7 @@ export class Miku extends Cormini {
   private readonly dreamPolicy: () => DreamPolicy;
   private readonly keepPastThinking: () => boolean;
   private readonly tz: () => string;
-  private readonly onEmotion: (values: Values) => void;
+  private readonly onEmotion: (values: Values, mood: Mood) => void;
   private dreamer: Dream | null = null;
   private state: EmotionState = initialEmotion();
 
@@ -134,7 +135,7 @@ export class Miku extends Cormini {
       this.state = stored;
     }
     // 先把当前状态推一次:形象层可能在这次挂载之前就已经起来了。
-    this.onEmotion(this.state.values);
+    this.onEmotion(this.state.values, this.state.mood);
     this.dreamer = new Dream({
       core,
       context: () => ({ maxTokens: this.context().maxTokens, keepPastThinking: this.keepPastThinking() }),
@@ -264,7 +265,7 @@ export class Miku extends Cormini {
     this.state.turns += 1;
     this.state.updatedAt = Date.now();
     this.persist();
-    this.onEmotion(this.state.values);
+    this.onEmotion(this.state.values, this.state.mood);
 
     const all = [...reasons, ...affectReasons];
     if (all.length > 0) {

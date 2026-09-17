@@ -28,6 +28,7 @@ import {
   type ResolvedChannels,
 } from './channels.ts';
 import { loadPack, type Pack } from './pack.ts';
+import { expressionForMood, missingExpressions, MOOD_EXPRESSIONS } from './expressions.ts';
 import { Performance } from './performance.ts';
 import { LIVE2D_CONFIG_GROUP, type Live2DConfigSection } from './config.ts';
 
@@ -73,6 +74,13 @@ export class Live2DWorld implements World {
   private boundPort = 0;
   /** 挂载前收到的内部状态:先记着,起服务时补上。 */
   private pendingEmotion: EmotionValues | null = null;
+  /** 挂载前收到的心情标签;表情层用它。 */
+  private pendingMood: string | null = null;
+  /** 此刻的心情与它对应的表情;心情由 Persona 给,表情由 `expressions.ts` 的表定。 */
+  private mood: string | null = null;
+  private expression: string | null = null;
+  /** 这份模型自带的表情名;读不到就是空集,表情层整层不启用。 */
+  private modelExpressions: Set<string> = new Set();
   private speaking = false;
   private lastFrame = '';
   /** 起服务时定下来的模型入口文件名;配置问题在这一刻暴露,不留到有人打开页面。 */
@@ -99,11 +107,16 @@ export class Live2DWorld implements World {
 
   /**
    * 内部状态入口。Persona 在情绪变化后调用;这是"身体由内部状态驱动"那条线。
-   * 挂载前调用也安全——先记住,起服务时补算。
+   *
+   * 连续值走通道基线,离散心情走表情层——两者写的是不相交的参数组,互不覆盖。
+   * 挂载前调用也安全:先记住,起服务时补算。
    */
-  setInternalState(values: EmotionValues): void {
+  setInternalState(values: EmotionValues, mood: string | null = null): void {
     this.pendingEmotion = values;
+    this.pendingMood = mood;
     this.performance?.setBaseline(baselineChannels(values));
+    this.mood = mood;
+    this.expression = expressionForMood(mood, this.modelExpressions);
   }
 
   /** 渲染页的地址;服务没起来时给的是配置端口上的预期地址。 */
@@ -193,6 +206,15 @@ export class Live2DWorld implements World {
     // 起服务之前先把配置查完:路径不对、模型点不清,都在挂载时报出来,不留到有人打开页面。
     this.modelFile = this.modelFileName();
 
+    // 表情层:用这份模型自带的表情名,表里没有的就不挂。要在定了模型入口之后才读得到。
+    this.modelExpressions = this.modelExpressionNames();
+    const absent = missingExpressions(this.modelExpressions);
+    if (absent.length > 0) {
+      host.log.warn('心情表里提到的表情这份模型没有,那几个心情只走通道基线', { missing: absent });
+    }
+    this.mood = this.pendingMood;
+    this.expression = expressionForMood(this.mood, this.modelExpressions);
+
     this.channels = resolveChannels(this.pack, parseParamMap(this.cfg.paramMap));
     const unmapped = unmappedChannels(this.channels);
     if (unmapped.length > 0) {
@@ -267,6 +289,13 @@ export class Live2DWorld implements World {
       if (url.pathname === '/pack/channels.json') {
         return this.sendJson(res, this.channels);
       }
+      if (url.pathname === '/pack/expressions.json') {
+        return this.sendJson(res, {
+          available: [...this.modelExpressions].sort(),
+          moodMap: MOOD_EXPRESSIONS,
+          current: this.expression,
+        });
+      }
       if (url.pathname === '/state') return this.openStream(res);
       if (url.pathname.startsWith('/lib/')) {
         return this.sendFile(res, this.underRoot(this.resolveDir(this.cfg.webDir, '播放器库'), url.pathname.slice('/lib/'.length)));
@@ -329,7 +358,13 @@ export class Live2DWorld implements World {
 
   private frame(): string {
     const channels = this.performance?.channelsAt(Date.now()) ?? {};
-    return JSON.stringify({ channels, speaking: this.speaking, clients: this.clients.size });
+    return JSON.stringify({
+      channels,
+      // 表情与通道写的是不相交的参数组,渲染端两样都照做。
+      expression: this.expression,
+      speaking: this.speaking,
+      clients: this.clients.size,
+    });
   }
 
   /**
@@ -369,6 +404,27 @@ export class Live2DWorld implements World {
     } catch (error) {
       this.host?.log.warn('读模型参数表失败', { err: String(error) });
       return null;
+    }
+  }
+
+  /**
+   * 这份模型自带的表情名,来自 model3 的 `FileReferences.Expressions`。
+   * 读不到就返回空集——表情层整层不启用,通道与片段照常。
+   */
+  private modelExpressionNames(): Set<string> {
+    try {
+      const dir = this.resolveDir(this.cfg.modelDir, '模型');
+      const model3 = JSON.parse(readFileSync(join(dir, this.modelFile), 'utf8')) as {
+        FileReferences?: { Expressions?: Array<{ Name?: string }> };
+      };
+      return new Set(
+        (model3.FileReferences?.Expressions ?? [])
+          .map((entry) => entry.Name)
+          .filter((name): name is string => typeof name === 'string'),
+      );
+    } catch (error) {
+      this.host?.log.warn('读模型表情表失败,表情层不启用', { err: String(error) });
+      return new Set();
     }
   }
 

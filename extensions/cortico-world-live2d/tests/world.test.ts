@@ -49,7 +49,17 @@ beforeEach(() => {
   for (const name of ['pixi.min.js', 'live2dcubismcore.min.js', 'cubism4.min.js']) {
     writeFileSync(join(webDir, 'js', name), `/* ${name} */`, 'utf8');
   }
-  writeFileSync(join(modelDir, 'miku.model3.json'), '{"version":3}', 'utf8');
+  // 模型替身带上四个情绪表情,让表情层在测试里也是活的。
+  writeFileSync(
+    join(modelDir, 'miku.model3.json'),
+    JSON.stringify({
+      version: 3,
+      FileReferences: {
+        Expressions: ['blush', 'lean', 'sing', 'heart'].map((name) => ({ Name: name, File: `${name}.exp3.json` })),
+      },
+    }),
+    'utf8',
+  );
   writeFileSync(join(root, 'secret.txt'), '不该被读到', 'utf8');
   port = 20800 + Math.floor(Math.random() * 200);
 });
@@ -88,7 +98,7 @@ describe('静态路由', () => {
     expect(page).toContain('__DSH_MODEL_FILE__');
     expect(page).toContain('miku.model3.json');
     expect(await (await fetch(url('/lib/js/pixi.min.js'))).text()).toContain('pixi.min.js');
-    expect(await (await fetch(url('/model/miku.model3.json'))).text()).toBe('{"version":3}');
+    expect(await (await fetch(url('/model/miku.model3.json'))).json()).toMatchObject({ version: 3 });
     expect(await (await fetch(url('/app.js'))).text()).toContain('EventSource');
   });
 
@@ -150,6 +160,56 @@ describe('内部状态驱动', () => {
     const frame = await firstFrame(controller.signal) as { channels: Record<string, number> };
     controller.abort();
     expect(frame.channels.MouthSmile).toBeGreaterThan(0.5);
+  });
+});
+
+describe('心情驱动的表情层', () => {
+  const calm = { valence: 0.35, arousal: 0.55, bond: 0.1, loneliness: 0.2, shyness: 0.1, empathy: 0 };
+
+  it('心情进表就挂对应表情,并随推流送到页面', async () => {
+    const live = await start();
+    live.setInternalState({ ...calm, shyness: 0.6 }, '害羞');
+    const controller = new AbortController();
+    const frame = await firstFrame(controller.signal) as { expression: string | null };
+    controller.abort();
+    expect(frame.expression).toBe('blush');
+  });
+
+  it('心情不在表里就是 null,交给连续的基线', async () => {
+    const live = await start();
+    live.setInternalState({ ...calm, loneliness: 0.8 }, '寂寞');
+    const controller = new AbortController();
+    const frame = await firstFrame(controller.signal) as { expression: string | null };
+    controller.abort();
+    expect(frame.expression).toBeNull();
+  });
+
+  it('表情表可以核对:有哪些、怎么映、此刻挂的是哪个', async () => {
+    const live = await start();
+    live.setInternalState(calm, '元气');
+    const table = await (await fetch(url('/pack/expressions.json'))).json() as {
+      available: string[]; moodMap: Record<string, string>; current: string | null;
+    };
+    expect(table.available).toEqual(['blush', 'heart', 'lean', 'sing']);
+    expect(table.moodMap['害羞']).toBe('blush');
+    expect(table.current).toBe('sing');
+  });
+
+  it('模型没有那个表情时不挂', async () => {
+    // 把模型替身换成一个只有 sing 的版本。
+    writeFileSync(
+      join(modelDir, 'miku.model3.json'),
+      JSON.stringify({ version: 3, FileReferences: { Expressions: [{ Name: 'sing', File: 'sing.exp3.json' }] } }),
+      'utf8',
+    );
+    const live = await start();
+    live.setInternalState({ ...calm, shyness: 0.6 }, '害羞');
+    const controller = new AbortController();
+    const frame = await firstFrame(controller.signal) as { expression: string | null };
+    controller.abort();
+    expect(frame.expression).toBeNull();
+    live.setInternalState(calm, '元气');
+    expect(await (await fetch(url('/pack/expressions.json'))).json()).toMatchObject({ current: 'sing' });
   });
 });
 

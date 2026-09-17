@@ -31,6 +31,7 @@
   var current = {};  // 平滑后的当前值
   var speaking = false;
   var speakStart = 0;
+  var lastExpression = null;
 
   function fit() {
     if (!app) return;
@@ -128,7 +129,32 @@
       var nowSpeaking = Boolean(payload.speaking);
       if (nowSpeaking && !speaking) speakStart = performance.now();
       speaking = nowSpeaking;
+      applyExpression(payload.expression || null);
     };
+  }
+
+  /**
+   * 表情层:World 按心情给出模型自带的表情名。
+   *
+   * 表情与通道写的是不相交的参数组(表情只写 Param125/Param130-137),所以两样都照做,
+   * 谁也不覆盖谁。只在变化时调一次,免得每帧重放同一段淡入。
+   */
+  function applyExpression(name) {
+    if (name === lastExpression) return;
+    lastExpression = name;
+    try {
+      if (!model || typeof model.expression !== 'function') return;
+      if (name) {
+        model.expression(name);
+        return;
+      }
+      var manager = model.internalModel && model.internalModel.motionManager
+        && model.internalModel.motionManager.expressionManager;
+      if (manager && typeof manager.resetExpression === 'function') manager.resetExpression();
+    } catch (e) {
+      // 不接管连接提示条:表情切不动不该让人以为整个页面坏了。
+      console.warn('[live2d] 表情切换失败', name, e);
+    }
   }
 
   boot();
