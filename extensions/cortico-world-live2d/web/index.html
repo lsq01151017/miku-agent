@@ -41,14 +41,14 @@
   }
   #talk a { color: var(--glass-accent); }
 
-  /* 她的回答:浮在模型上方的一条扁字幕。 */
+  /* 她的回答:浮在模型上方的一条扁字幕。比输入区还扁还长,衬底更薄。 */
   #subtitle {
-    position: fixed; left: 50%; transform: translateX(-50%); bottom: 76px;
-    width: min(1080px, calc(100vw - 40px)); padding: 4px 14px; border-radius: 8px;
-    border: 0; background: rgba(10, 16, 20, 0.34);
-    -webkit-backdrop-filter: blur(8px);
-    backdrop-filter: blur(8px);
-    color: var(--glass-ink); font: 15px/1.42 system-ui, sans-serif;
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 68px;
+    width: min(1400px, calc(100vw - 24px)); padding: 1px 16px; border-radius: 6px;
+    border: 0; background: rgba(8, 14, 18, 0.20);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    color: var(--glass-ink); font: 15px/1.32 system-ui, sans-serif;
     text-align: center; white-space: pre-wrap; word-break: break-word;
     opacity: 0; transition: opacity .18s ease;
     pointer-events: none;
@@ -78,6 +78,11 @@
   #composer input::placeholder { color: #8ea6ad; }
   #composer input:focus { outline: none; border-color: var(--glass-accent); }
   #btn-history { padding: 4px 10px; border-radius: 8px; font-size: 11px; color: var(--glass-dim); }
+  #panel .more {
+    width: 100%; margin-top: 8px; padding: 4px 8px; font-size: 11px;
+    color: var(--glass-dim); background: rgba(255, 255, 255, 0.04);
+  }
+  #panel-more.collapsed { display: none; }
   button {
     padding: 8px 16px; border-radius: 10px; cursor: pointer;
     border: 1px solid var(--glass-edge); background: var(--glass-bg-strong); color: var(--glass-ink);
@@ -139,29 +144,33 @@
   <h2>内部状态 <span id="mood">—</span></h2>
   <div id="bars"></div>
 
-  <section>
-    <div class="kv"><span>表情</span><b id="expression">—</b></div>
-    <div class="kv"><span>正在做</span><b id="clips">—</b></div>
-    <div class="kv"><span>说话中</span><b id="speaking">否</b></div>
-    <div class="kv"><span>连着几页</span><b id="clients">0</b></div>
-  </section>
+  <!-- 数值之下的东西默认收起:面板只留情绪那几条,要看别的按开关。 -->
+  <button id="btn-panel" type="button" class="more">更多 ▾</button>
+  <div id="panel-more" class="collapsed">
+    <section>
+      <div class="kv"><span>表情</span><b id="expression">—</b></div>
+      <div class="kv"><span>正在做</span><b id="clips">—</b></div>
+      <div class="kv"><span>说话中</span><b id="speaking">否</b></div>
+      <div class="kv"><span>连着几页</span><b id="clients">0</b></div>
+    </section>
 
-  <section>
-    <div class="ctl">
-      <label>缩放<input id="zoom" type="range" min="30" max="260" value="100"><span class="num" id="zoom-val">100%</span></label>
-      <label>左右<input id="offset-x" type="range" min="-400" max="400" value="0"><span class="num" id="offset-x-val">0</span></label>
-      <label>上下<input id="offset-y" type="range" min="-400" max="400" value="0"><span class="num" id="offset-y-val">0</span></label>
-      <div class="btns">
-        <button id="btn-reset" type="button">复位</button>
-        <button id="btn-save" type="button">记住</button>
+    <section>
+      <div class="ctl">
+        <label>缩放<input id="zoom" type="range" min="30" max="260" value="100"><span class="num" id="zoom-val">100%</span></label>
+        <label>左右<input id="offset-x" type="range" min="-400" max="400" value="0"><span class="num" id="offset-x-val">0</span></label>
+        <label>上下<input id="offset-y" type="range" min="-400" max="400" value="0"><span class="num" id="offset-y-val">0</span></label>
+        <div class="btns">
+          <button id="btn-reset" type="button">复位</button>
+          <button id="btn-save" type="button">记住</button>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <section>
-    <div class="kv"><span>通道</span><span class="muted">此刻的值</span></div>
-    <div id="channels"></div>
-  </section>
+    <section>
+      <div class="kv"><span>通道</span><span class="muted">此刻的值</span></div>
+      <div id="channels"></div>
+    </section>
+  </div>
 </div>
 
 <!-- 三个库由本扩展的渲染服务从配置的播放器库目录转发;应用脚本在 /app.js。 -->

@@ -30,9 +30,12 @@
 
   /** 底部输入区留多少条历史(收起时只看得到最近一句);字幕在她说完之后留一会儿再淡掉。 */
   var MINE_LINES = 50;
+  /** 拖到多远也要留这么多像素的她可见。 */
+  var KEEP_VISIBLE_PX = 80;
   var SUBTITLE_MS = 9000;
   var SYSTEM_SUBTITLE_MS = 6000;
   var AGENT_CHAT_PATH = '/agent/chat';
+  var PANEL_MORE_KEY = 'cortico.live2d.panelMore';
 
   /** 情绪六维的中文名;与 `bots/miku/persona/emotion.ts` 的维度同键。 */
   var EMOTION_LABELS = {
@@ -65,6 +68,8 @@
     composerForm: document.getElementById('composer-form'),
     composerInput: document.getElementById('composer-input'),
     history: document.getElementById('btn-history'),
+    panelMore: document.getElementById('panel-more'),
+    panelMoreButton: document.getElementById('btn-panel'),
   };
 
   function why(message) {
@@ -127,18 +132,31 @@
     if (!app) return;
     app.renderer.resize(window.innerWidth, window.innerHeight);
     if (!model) return;
-    fitScale = Math.min(window.innerWidth / model.width, window.innerHeight / model.height);
+    var base = Math.min(window.innerWidth / model.width, window.innerHeight / model.height);
+    // 窗口量到 0(最小化、切标签)时别把她缩成 0:那看起来就是"模型突然不见了"。
+    if (isFinite(base) && base > 0) fitScale = base;
     applyTransform();
   }
 
   /** 缩放与位置套到模型上;取景只影响画面,不回写模型。 */
   function applyTransform() {
     if (!model) return;
+    var base = Math.min(window.innerWidth / model.width, window.innerHeight / model.height);
+    if (isFinite(base) && base > 0) fitScale = base;
+    // 至少留 KEEP_VISIBLE_PX 像素的她还在画面里:拖到头也不会整个人消失。
+    var halfW = (model.width * fitScale * view.zoom) / 2;
+    var halfH = (model.height * fitScale * view.zoom) / 2;
+    var limitX = Math.max(0, halfW + window.innerWidth / 2 - KEEP_VISIBLE_PX);
+    var limitY = Math.max(0, halfH + window.innerHeight / 2 - KEEP_VISIBLE_PX);
+    view.x = Math.max(-limitX, Math.min(limitX, view.x));
+    view.y = Math.max(-limitY, Math.min(limitY, view.y));
     model.scale.set(fitScale * view.zoom);
     model.position.set(window.innerWidth / 2 + view.x, window.innerHeight / 2 + view.y);
     if (el.zoomVal) el.zoomVal.textContent = Math.round(view.zoom * 100) + '%';
     if (el.offsetXVal) el.offsetXVal.textContent = String(Math.round(view.x));
     if (el.offsetYVal) el.offsetYVal.textContent = String(Math.round(view.y));
+    if (el.offsetX) el.offsetX.value = String(Math.round(view.x));
+    if (el.offsetY) el.offsetY.value = String(Math.round(view.y));
   }
 
   /**
@@ -362,10 +380,11 @@
       });
       el.canvas.addEventListener('pointermove', function (event) {
         if (!dragging) return;
+        // 松手时鼠标可能在窗口外(pointerup 收不到):这时按键已经不按了,直接当成松手,
+        // 否则她会跟着鼠标一路滑出画面——看着就是"模型突然消失"。
+        if (event.buttons === 0) { dragging = null; el.canvas.className = el.canvas.className.replace(' dragging', ''); return; }
         view.x = dragging.fromX + (event.clientX - dragging.x);
         view.y = dragging.fromY + (event.clientY - dragging.y);
-        if (el.offsetX) el.offsetX.value = String(Math.round(view.x));
-        if (el.offsetY) el.offsetY.value = String(Math.round(view.y));
         applyTransform();
       });
       var release = function () {
@@ -376,7 +395,34 @@
       };
       el.canvas.addEventListener('pointerup', release);
       el.canvas.addEventListener('pointercancel', release);
+      // 指针在窗口外松开、或切走标签页时也要收尾。
+      if (window.addEventListener) {
+        window.addEventListener('pointerup', release);
+        window.addEventListener('blur', release);
+      }
     }
+  }
+
+  /** 面板的「更多」:情绪那几条常显,其余收起,用时展开;记住上次的选择。 */
+  function bindPanelMore() {
+    if (!el.panelMore || !el.panelMoreButton) return;
+    var expanded = false;
+    try {
+      expanded = window.localStorage && window.localStorage.getItem(PANEL_MORE_KEY) === '1';
+    } catch (e) { /* 读不到就用收起 */ }
+    setPanelMore(expanded);
+    el.panelMoreButton.addEventListener('click', function () {
+      setPanelMore(el.panelMore.className.indexOf('collapsed') >= 0);
+    });
+  }
+
+  function setPanelMore(expanded) {
+    if (!el.panelMore || !el.panelMoreButton) return;
+    el.panelMore.className = expanded ? '' : 'collapsed';
+    el.panelMoreButton.textContent = expanded ? '收起 ▴' : '更多 ▾';
+    try {
+      if (window.localStorage) window.localStorage.setItem(PANEL_MORE_KEY, expanded ? '1' : '0');
+    } catch (e) { /* 同上 */ }
   }
 
   /**
@@ -398,6 +444,21 @@
       window.addEventListener('pointerleave', onLeave);
       window.addEventListener('blur', onLeave);
     }
+  }
+
+  /**
+   * 显卡上下文丢了(切标签太久、驱动回收)时,画面会突然变成空白——那看着就是"模型消失了"。
+   * 这里给一句能读懂的话,别让人以为是她坏了。
+   */
+  function bindContextLoss() {
+    if (!el.canvas || !el.canvas.addEventListener) return;
+    el.canvas.addEventListener('webglcontextlost', function (event) {
+      if (event && event.preventDefault) event.preventDefault();
+      why('显卡上下文丢了(常见于切走标签页太久),画面会空着。刷新这一页就回来。');
+    });
+    el.canvas.addEventListener('webglcontextrestored', function () {
+      if (el.why) el.why.style.display = 'none';
+    });
   }
 
   /** 眼神跟随的参数名:由通道表决定(换模型只换映射),缺了就用 Cubism 的通用名。 */
@@ -513,8 +574,10 @@
     lookParams = resolveLookParams();
     applyTransform();
     bindControls();
+    bindPanelMore();
     bindLook();
     bindComposer();
+    bindContextLoss();
     // Cubism 每帧会把参数复位成模型默认值,所以写参数只有一个正确的时刻:模型复位之后、
     // 更新之前(`beforeModelUpdate`)。自己的 rAF 与模型更新没有固定先后,写早了当帧就被抹掉。
     if (model.internalModel && typeof model.internalModel.on === 'function') {

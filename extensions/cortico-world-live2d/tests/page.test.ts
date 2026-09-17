@@ -357,6 +357,23 @@ describe('播放器页面', () => {
     expect(node('composer').className).not.toContain('expanded');
     expect(node('btn-history').textContent).toBe('历史 2');
 
+    // 面板:数值之下的东西默认收起,按「更多」展开。
+    expect(node('panel-more').className).toContain('collapsed');
+    expect(node('btn-panel').textContent).toBe('更多 ▾');
+    node('btn-panel').fire('click');
+    expect(node('panel-more').className).not.toContain('collapsed');
+    expect(node('btn-panel').textContent).toBe('收起 ▴');
+    node('btn-panel').fire('click');
+    expect(node('panel-more').className).toContain('collapsed');
+
+    // 取景不会把她拖出画面:推到极限后至少留一节可见。
+    node('zoom').value = '30' as never;
+    node('zoom').fire('input');
+    node('offset-x').value = '400' as never;
+    node('offset-x').fire('input');
+    const maxOffsetX = 1600;
+    expect(Math.abs(Number(node('offset-x-val').textContent))).toBeLessThanOrEqual(maxOffsetX);
+
     // ── 表情按序号重放 ──────────────────────────────────────────────────────
     send({ channels: { MouthSmile: 0.5 }, expression: 'blush', expressionToken: 1, speaking: false });
     send({ channels: { MouthSmile: 0.5 }, expression: 'blush', expressionToken: 2, speaking: false });
