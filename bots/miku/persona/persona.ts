@@ -144,6 +144,13 @@ export interface MikuOptions extends CorminiOptions {
    * 连续值走通道基线,离散心情走表情层,所以两个都给。没人接时只是一个空转的回调。
    */
   onEmotion?: (values: Values, mood: Mood) => void;
+  /**
+   * 操作员说的话(原样)交给表现层。
+   *
+   * 「张嘴」「点点头」这类吩咐是动作指令,词表与片段都在形象层那边,Persona 不解释它,
+   * 只把话递过去。没人接时是空转的回调。
+   */
+  onOperatorText?: (text: string) => void;
 }
 
 /** 梦留下的浮现只留最近几条:它是反射,不是流水账。 */
@@ -160,6 +167,7 @@ export class Miku extends Cormini {
   private readonly keepPastThinking: () => boolean;
   private readonly tz: () => string;
   private readonly onEmotion: (values: Values, mood: Mood) => void;
+  private readonly onOperatorText: (text: string) => void;
   private dreamer: Dream | null = null;
   private state: EmotionState = initialEmotion();
 
@@ -172,6 +180,7 @@ export class Miku extends Cormini {
     this.keepPastThinking = opts.keepPastThinking ?? ((): boolean => false);
     this.tz = opts.timezone ?? ((): string => 'UTC');
     this.onEmotion = opts.onEmotion ?? ((): void => {});
+    this.onOperatorText = opts.onOperatorText ?? ((): void => {});
     this.memory.ensureDirs(WORKSPACE_DIRS);
   }
 
@@ -310,14 +319,22 @@ export class Miku extends Cormini {
    */
   override onDelivery(ctx: { events: EventEnvelope[] }): void {
     super.onDelivery(ctx);
-    const policy = this.emotionPolicy();
-    if (!policy.enabled) return;
 
     const spoken = ctx.events
       .filter((event) => event.text && (event.origin === 'external' || isOperatorMessage(event)))
       .map((event) => operatorBody(event) ?? event.text ?? '')
       .filter((text) => text !== '');
     if (spoken.length === 0) return;
+
+    // 操作员的原话先递给表现层:「张嘴」这类吩咐是动作指令,与情绪开关无关。
+    for (const event of ctx.events) {
+      if (!isOperatorMessage(event)) continue;
+      const text = operatorBody(event) ?? event.text ?? '';
+      if (text !== '') this.onOperatorText(text);
+    }
+
+    const policy = this.emotionPolicy();
+    if (!policy.enabled) return;
 
     const reasons = decayEmotion(this.state, Date.now(), policy.decayScale);
     const { deltas, reasons: affectReasons } = analyzeAffect(spoken.join('\n'));

@@ -265,6 +265,41 @@
       "channel": "fx",
       "clipId": "fx_glasses",
       "lifecycle": "pulse"
+    },
+    {
+      "word": "张嘴",
+      "clipId": "mouth_open",
+      "channel": "gesture",
+      "lifecycle": "pulse",
+      "intensity": 1
+    },
+    {
+      "word": "张开嘴",
+      "clipId": "mouth_open",
+      "channel": "gesture",
+      "lifecycle": "pulse",
+      "intensity": 1
+    },
+    {
+      "word": "张大嘴",
+      "clipId": "mouth_open",
+      "channel": "gesture",
+      "lifecycle": "pulse",
+      "intensity": 1
+    },
+    {
+      "word": "张开嘴巴",
+      "clipId": "mouth_open",
+      "channel": "gesture",
+      "lifecycle": "pulse",
+      "intensity": 1
+    },
+    {
+      "word": "啊——",
+      "clipId": "mouth_open",
+      "channel": "gesture",
+      "lifecycle": "pulse",
+      "intensity": 1
     }
   ],
   "aliases": {
@@ -298,6 +333,9 @@
     "开始看向弹幕": "看向弹幕",
     "开始看向镜头": "看向镜头",
     "开始看向下面": "看向下面",
-    "开始看向斜上方": "看向斜上方"
+    "开始看向斜上方": "看向斜上方",
+    "嘴张开": "张嘴",
+    "张口": "张嘴",
+    "哈——": "张嘴"
   }
 }

@@ -45,6 +45,19 @@ function emotionSink(worlds: readonly World[]): (values: Values, mood: Mood) => 
   return (values, mood) => live2d?.setInternalState?.(values, mood);
 }
 
+/**
+ * 操作员说的话原样交给形象层。
+ *
+ * 「张嘴」「点点头」这类吩咐是**动作指令**,词表与片段都在形象层那边,所以人格包不解释它们,
+ * 只把话递过去。同样是可选方法:扩展没装或没实现就是空转。
+ */
+function performSink(worlds: readonly World[]): (text: string) => void {
+  const live2d = worlds.find((world) => world.id === 'live2d') as
+    | { perform?: (text: string) => void }
+    | undefined;
+  return (text) => live2d?.perform?.(text);
+}
+
 export interface MikuConfig extends CoreConfig {
   /** 阶段长度四项归Persona,摘思维链归 core;同住 context 段。 */
   context: CoreConfig['context'] & ContextStagePolicy;
@@ -87,6 +100,7 @@ function build(loaded: LoadedConfig<MikuConfig>, worlds: World[]): BotParts<Miku
     keepPastThinking: () => cfg.context.keepPastThinking,
     timezone: () => cfg.timezone,
     onEmotion: emotionSink(worlds),
+    onOperatorText: performSink(worlds),
     tickDelayMs: () =>
       cfg.tick.intervalMinutes === null ? null : cfg.tick.intervalMinutes * 60_000,
   });
