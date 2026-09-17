@@ -18,10 +18,13 @@
   /* 指针落在这层透明覆层上,画布自己不接指针:浏览器手里没有能拖的东西,拖动就不会拖出一份跟着鼠标的副本。 */
   canvas { display: block; -webkit-user-drag: none; user-select: none; touch-action: none; }
   #hit {
-    position: fixed; inset: 0; cursor: grab; touch-action: none;
+    position: fixed; inset: 0; z-index: 1; cursor: grab; touch-action: none;
     -webkit-user-drag: none; user-select: none;
   }
   #hit.dragging { cursor: grabbing; }
+  /* 覆层盖住整页,面板、输入区、提示要压在它上面才点得到。 */
+  #conn, #talk, #why, #bottom, #panel { z-index: 3; }
+  #probe { color: var(--glass-accent); font: 11px/1.5 ui-monospace, monospace; }
 
   .glass {
     background: var(--glass-bg);
@@ -135,7 +138,7 @@
 <canvas id="stage" draggable="false"></canvas>
 <div id="hit"></div>
 <div id="conn" class="glass">连接中…</div>
-<div id="talk" class="glass">这一页是她的身体。<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话。拖动画面可以挪动她。</div>
+<div id="talk" class="glass">这一页是她的身体。<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话。拖动画面可以挪动她。<br><span id="probe">—</span></div>
 <div id="why"></div>
 
 <!-- 底部一栏:她的字幕在上,我发过的话与输入框在下。 -->

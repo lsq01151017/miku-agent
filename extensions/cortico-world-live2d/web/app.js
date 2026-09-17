@@ -71,6 +71,7 @@
     history: document.getElementById('btn-history'),
     panelMore: document.getElementById('panel-more'),
     panelMoreButton: document.getElementById('btn-panel'),
+    probe: document.getElementById('probe'),
   };
 
   function why(message) {
@@ -98,6 +99,9 @@
   // 取景:画面上的缩放与位置,与模型无关。
   var view = { zoom: 1, x: 0, y: 0 };
   var fitScale = 1;
+  // 模型自己的尺寸,加载后量一次(那时 scale 是 1);取景一律用它算,不用会随缩放变的 width/height。
+  var naturalW = 0;
+  var naturalH = 0;
   var dragging = null;
   /** 只启动一次(见 boot)。 */
   var booted = false;
@@ -135,25 +139,36 @@
     if (!app) return;
     app.renderer.resize(window.innerWidth, window.innerHeight);
     if (!model) return;
-    var base = Math.min(window.innerWidth / model.width, window.innerHeight / model.height);
-    // 窗口量到 0(最小化、切标签)时别把她缩成 0:那看起来就是"模型突然不见了"。
-    if (isFinite(base) && base > 0) fitScale = base;
+    fitScale = fitScaleFor();
     applyTransform();
+  }
+
+  /**
+   * 模型贴合窗口的缩放。
+   *
+   * 只能用模型自己的尺寸(加载时 scale 是 1,那一刻量到的才是它):模型的 width/height 含当前缩放,
+   * 拿它算会把缩放一次次乘回去——拖动时每动一下算一次,她就一会正常一会巨大,看着像多出一个自己。
+   */
+  function fitScaleFor() {
+    if (naturalW <= 0 || naturalH <= 0) return fitScale;
+    var base = Math.min(window.innerWidth / naturalW, window.innerHeight / naturalH);
+    // 窗口量到 0(最小化、切标签)时别把她缩成 0:那看起来就是"模型突然不见了"。
+    return isFinite(base) && base > 0 ? base : fitScale;
   }
 
   /** 缩放与位置套到模型上;取景只影响画面,不回写模型。 */
   function applyTransform() {
     if (!model) return;
-    var base = Math.min(window.innerWidth / model.width, window.innerHeight / model.height);
-    if (isFinite(base) && base > 0) fitScale = base;
+    fitScale = fitScaleFor();
+    var scale = fitScale * view.zoom;
     // 至少留 KEEP_VISIBLE_PX 像素的她还在画面里:拖到头也不会整个人消失。
-    var halfW = (model.width * fitScale * view.zoom) / 2;
-    var halfH = (model.height * fitScale * view.zoom) / 2;
+    var halfW = (naturalW * scale) / 2;
+    var halfH = (naturalH * scale) / 2;
     var limitX = Math.max(0, halfW + window.innerWidth / 2 - KEEP_VISIBLE_PX);
     var limitY = Math.max(0, halfH + window.innerHeight / 2 - KEEP_VISIBLE_PX);
     view.x = Math.max(-limitX, Math.min(limitX, view.x));
     view.y = Math.max(-limitY, Math.min(limitY, view.y));
-    model.scale.set(fitScale * view.zoom);
+    model.scale.set(scale);
     model.position.set(window.innerWidth / 2 + view.x, window.innerHeight / 2 + view.y);
     if (el.zoomVal) el.zoomVal.textContent = Math.round(view.zoom * 100) + '%';
     if (el.offsetXVal) el.offsetXVal.textContent = String(Math.round(view.x));
@@ -418,6 +433,31 @@
     }
   }
 
+  /**
+   * 拖动时浏览器到底做了什么(临时)。一行字报出按下的元素,以及几个原生事件各发生了几次:
+   * 有 dragstart 说明是浏览器的原生拖拽,没有就说明影子不是拖出来的。排查完删掉。
+   */
+  function bindDragProbe() {
+    if (!document.addEventListener) return;
+    var counts = { pointerdown: 0, dragstart: 0, drag: 0, dragend: 0, selectstart: 0 };
+    var target = '—';
+    var paint = function () {
+      if (!el.probe) return;
+      el.probe.textContent = '按下 ' + target + ' · dragstart ' + counts.dragstart +
+        ' · drag ' + counts.drag + ' · dragend ' + counts.dragend +
+        ' · selectstart ' + counts.selectstart;
+    };
+    Object.keys(counts).forEach(function (name) {
+      document.addEventListener(name, function (event) {
+        counts[name] += 1;
+        var node = (event && event.target) || {};
+        target = String(node.tagName || '?').toLowerCase() + (node.id ? '#' + node.id : '');
+        paint();
+      }, true);
+    });
+    paint();
+  }
+
   /** 面板的「更多」:情绪那几条常显,其余收起,用时展开;记住上次的选择。 */
   function bindPanelMore() {
     if (!el.panelMore || !el.panelMoreButton) return;
@@ -587,12 +627,16 @@
       return;
     }
     app.stage.addChild(model);
-    fitScale = Math.min(window.innerWidth / model.width, window.innerHeight / model.height);
+    // 刚加载完 scale 是 1,此刻的 width/height 才是模型自己的尺寸,后面都会带上缩放。
+    naturalW = model.width;
+    naturalH = model.height;
+    fitScale = fitScaleFor();
     model.anchor.set(0.5, 0.5);
     blinkParams = blinkParameters(model.internalModel);
     lookParams = resolveLookParams();
     applyTransform();
     bindControls();
+    bindDragProbe();
     bindPanelMore();
     bindLook();
     bindComposer();

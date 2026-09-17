@@ -85,9 +85,13 @@ function stubBrowser(): {
   };
 
   const model = {
-    width: 100,
-    height: 100,
-    scale: { set: (value: number) => scales.push(value), x: 1 },
+    // PIXI 容器的 width/height 含当前缩放。取景若拿它们算贴合比例,每算一次就再乘一次缩放。
+    get width() { return 100 * model.scale.x; },
+    get height() { return 100 * model.scale.x; },
+    scale: {
+      x: 1,
+      set(value: number) { scales.push(value); model.scale.x = value; },
+    },
     anchor: { set: () => {} },
     position: { set: (x: number, y: number) => positions.push({ x, y }) },
     internalModel: {
@@ -295,9 +299,14 @@ describe('播放器页面', () => {
     node('hit').fire('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 });
     node('hit').fire('pointermove', { clientX: 130, clientY: 90, pointerId: 1 });
     expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800 + 70, y: 450 - 35 });
+    // 连着拖动,缩放不变:贴合比例只由模型自己的尺寸和窗口决定。
+    const scalesBefore = stubs.scales.length;
+    node('hit').fire('pointermove', { clientX: 140, clientY: 90, pointerId: 1 });
+    node('hit').fire('pointermove', { clientX: 150, clientY: 90, pointerId: 1 });
+    expect(stubs.scales.slice(scalesBefore)).toEqual([fit * 1.5, fit * 1.5]);
     node('hit').fire('pointerup', {});
     expect(stubs.stored.length).toBeGreaterThan(0);
-    expect(JSON.parse(stubs.stored[stubs.stored.length - 1]!)).toMatchObject({ zoom: 1.5, x: 70, y: -35 });
+    expect(JSON.parse(stubs.stored[stubs.stored.length - 1]!)).toMatchObject({ zoom: 1.5, x: 90, y: -35 });
 
     // 复位:回到 100% 与画面中心。
     node('btn-reset').fire('click');
