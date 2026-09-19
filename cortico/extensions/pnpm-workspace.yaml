@@ -1,0 +1,4 @@
+# 这个目录是自己的安装根,不是 cortico/ 工作区的一部分。
+# 没有它,pnpm 会向上找到 cortico/pnpm-workspace.yaml,把 cortico/ 当成项目根,
+# 于是这里 package.json 的依赖永远装不上(表现为 "Already up to date")。
+packages: []

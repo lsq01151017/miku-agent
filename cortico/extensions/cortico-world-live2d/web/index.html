@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>初音未来 · Live2D</title>
+<style>
+  :root {
+    /* 磨砂玻璃:半透明底 + 背景模糊 + 一道细边。面板、字幕、输入区、按键都用这一套。 */
+    --glass-bg: rgba(22, 32, 38, 0.42);
+    --glass-bg-strong: rgba(22, 32, 38, 0.58);
+    --glass-edge: rgba(255, 255, 255, 0.14);
+    --glass-ink: #e6fbf6;
+    --glass-dim: #a8c2c9;
+    --glass-accent: #39c5bb;
+  }
+  html, body { margin: 0; height: 100%; background: #10161a; overflow: hidden; }
+  /* 指针落在这层透明覆层上,画布自己不接指针:浏览器手里没有能拖的东西,拖动就不会拖出一份跟着鼠标的副本。 */
+  canvas { display: block; -webkit-user-drag: none; user-select: none; touch-action: none; }
+  #hit {
+    position: fixed; inset: 0; z-index: 1; cursor: grab; touch-action: none;
+    -webkit-user-drag: none; user-select: none;
+  }
+  #hit.dragging { cursor: grabbing; }
+  /* 覆层盖住整页,面板、输入区、提示要压在它上面才点得到。 */
+  #conn, #talk, #why, #bottom, #panel { z-index: 3; }
+
+  .glass {
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-edge);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+  }
+
+  #conn {
+    position: fixed; left: 12px; top: 12px; padding: 4px 10px; border-radius: 999px;
+    font: 12px/1.6 system-ui, sans-serif; color: var(--glass-ink);
+  }
+  #conn.on { color: #8ff0dc; }
+  #why {
+    position: fixed; left: 12px; bottom: 132px; right: 320px; padding: 8px 12px; border-radius: 10px;
+    font: 12px/1.7 ui-monospace, monospace; color: #ffd9d9; display: none; white-space: pre-wrap;
+  }
+  #talk {
+    position: fixed; left: 12px; top: 46px; padding: 5px 10px; border-radius: 10px;
+    font: 12px/1.7 system-ui, sans-serif; color: var(--glass-dim); max-width: 46vw;
+  }
+  #talk a { color: var(--glass-accent); }
+
+  /* 她的话和我发的话同住底部一栏:字幕在上、输入区在下,顺序固定,字号不变,行间压到最小。 */
+  #bottom {
+    position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    pointer-events: none;
+  }
+  #subtitle {
+    position: relative;
+    width: min(1140px, calc(100vw - 28px)); padding: 0 14px; border-radius: 6px;
+    border: 0; background: rgba(10, 16, 20, 0.34);
+    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(8px);
+    color: var(--glass-ink); font: 15px/1 system-ui, sans-serif;
+    text-align: center; white-space: pre-wrap; word-break: break-word;
+    opacity: 0; transition: opacity .18s ease;
+    pointer-events: none;
+  }
+  #subtitle.on { opacity: 1; }
+
+  /* 底部输入区:扁平的;只留最近一句,其余收起,要用时展开。 */
+  #composer {
+    position: relative; pointer-events: auto;
+    width: min(1080px, calc(100vw - 40px)); padding: 7px 10px; border-radius: 14px;
+    color: var(--glass-ink); font: 14px/1.5 system-ui, sans-serif;
+  }
+  #composer.hidden { display: none; }
+  #mine {
+    display: flex; flex-direction: column; gap: 2px; padding: 0 4px;
+    font-size: 12px; color: var(--glass-dim); overflow: hidden; max-height: 19px;
+  }
+  #composer.expanded #mine { max-height: 30vh; overflow-y: auto; padding-bottom: 6px; }
+  #mine div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #composer:not(.expanded) #mine div:not(:last-child) { display: none; }
+  #composer form { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  #composer input {
+    flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px;
+    border: 1px solid var(--glass-edge); background: rgba(255, 255, 255, 0.06);
+    color: var(--glass-ink); font: 14px/1.4 system-ui, sans-serif;
+  }
+  #composer input::placeholder { color: #8ea6ad; }
+  #composer input:focus { outline: none; border-color: var(--glass-accent); }
+  #btn-history { padding: 4px 10px; border-radius: 8px; font-size: 11px; color: var(--glass-dim); }
+  #panel .more {
+    width: 100%; margin-top: 8px; padding: 4px 8px; font-size: 11px;
+    color: var(--glass-dim); background: rgba(255, 255, 255, 0.04);
+  }
+  #panel-more.collapsed { display: none; }
+  button {
+    padding: 8px 16px; border-radius: 10px; cursor: pointer;
+    border: 1px solid var(--glass-edge); background: var(--glass-bg-strong); color: var(--glass-ink);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+    font: 14px/1.4 system-ui, sans-serif;
+  }
+  button:hover { background: rgba(57, 197, 187, 0.22); border-color: var(--glass-accent); }
+  button:active { transform: translateY(1px); }
+
+  /* 右侧数值面板:同一套玻璃。 */
+  #panel {
+    position: fixed; right: 12px; top: 12px; width: 288px; max-height: calc(100% - 120px);
+    overflow-y: auto; padding: 10px 12px 12px; border-radius: 14px;
+    color: var(--glass-ink); font: 12px/1.6 system-ui, sans-serif;
+  }
+  #panel h2 {
+    margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--glass-accent);
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  #panel h2 span { color: var(--glass-dim); font-weight: 400; }
+  #panel section { margin-top: 10px; }
+  #panel .muted { color: var(--glass-dim); }
+  .row { display: grid; grid-template-columns: 62px 1fr 44px; gap: 6px; align-items: center; }
+  .row .bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.10); overflow: hidden; }
+  .row .bar > i { display: block; height: 100%; background: var(--glass-accent); width: 0; }
+  .row .num, .ctl .num { text-align: right; font: 11px/1.6 ui-monospace, monospace; color: var(--glass-dim); }
+  .kv { display: flex; justify-content: space-between; gap: 8px; }
+  .kv b { font-weight: 600; color: #dff6f2; }
+  .ctl { margin-top: 8px; }
+  .ctl label { display: grid; grid-template-columns: 46px 1fr 52px; gap: 6px; align-items: center; margin-top: 4px; }
+  .ctl input[type=range] { width: 100%; accent-color: var(--glass-accent); }
+  .btns { display: flex; gap: 6px; margin-top: 8px; }
+  .btns button { flex: 1; padding: 5px 8px; font-size: 12px; }
+  #channels { font: 11px/1.5 ui-monospace, monospace; color: var(--glass-dim); }
+  #channels div { display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<canvas id="stage" draggable="false"></canvas>
+<div id="hit"></div>
+<div id="conn" class="glass">连接中…</div>
+<div id="talk" class="glass">这一页是她的身体。<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话。拖动画面可以挪动她。</div>
+<div id="why"></div>
+
+<!-- 底部一栏:她的字幕在上,我发过的话与输入框在下。 -->
+<div id="bottom">
+<div id="subtitle" class="glass"></div>
+
+<div id="composer" class="glass hidden">
+  <div id="mine"></div>
+  <form id="composer-form" autocomplete="off">
+    <input id="composer-input" type="text" placeholder="对她说点什么…" aria-label="对她说点什么">
+    <button id="btn-history" type="button" title="展开我发过的话">历史</button>
+    <button type="submit">说</button>
+  </form>
+</div>
+</div>
+
+<div id="panel" class="glass">
+  <h2>内部状态 <span id="mood">—</span></h2>
+  <div id="bars"></div>
+
+  <!-- 数值之下的东西默认收起:面板只留情绪那几条,要看别的按开关。 -->
+  <button id="btn-panel" type="button" class="more">更多 ▾</button>
+  <div id="panel-more" class="collapsed">
+    <section>
+      <div class="kv"><span>表情</span><b id="expression">—</b></div>
+      <div class="kv"><span>正在做</span><b id="clips">—</b></div>
+      <div class="kv"><span>说话中</span><b id="speaking">否</b></div>
+      <div class="kv"><span>连着几页</span><b id="clients">0</b></div>
+    </section>
+
+    <section>
+      <div class="ctl">
+        <label>缩放<input id="zoom" type="range" min="30" max="260" value="100"><span class="num" id="zoom-val">100%</span></label>
+        <label>左右<input id="offset-x" type="range" min="-400" max="400" value="0"><span class="num" id="offset-x-val">0</span></label>
+        <label>上下<input id="offset-y" type="range" min="-400" max="400" value="0"><span class="num" id="offset-y-val">0</span></label>
+        <div class="btns">
+          <button id="btn-reset" type="button">复位</button>
+          <button id="btn-save" type="button">记住</button>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="kv"><span>通道</span><span class="muted">此刻的值</span></div>
+      <div id="channels"></div>
+    </section>
+  </div>
+</div>
+
+<!-- 三个库由本扩展的渲染服务从配置的播放器库目录转发;应用脚本在 /app.js。 -->
+<script src="/lib/js/pixi.min.js"></script>
+<script src="/lib/js/live2dcubismcore.min.js"></script>
+<script src="/lib/js/cubism4.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

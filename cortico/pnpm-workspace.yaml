@@ -1,0 +1,4 @@
+allowBuilds:
+  '@parcel/watcher': false
+  canvas: set this to true or false
+  esbuild: true
