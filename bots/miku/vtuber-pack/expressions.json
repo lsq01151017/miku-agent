@@ -1,5 +1,5 @@
 {
-  "_note": "台词 → 模型自带表情的指令表。expression 必须是 model3.json 的 Expressions 里有的名字；words 命中即挂，长词优先，同一段话里同一条只触发一次。水印不是表演，不在这里。",
+  "_note": "台词 → 模型自带表情的指令表。expression 必须是 model3.json 的 Expressions 里有的名字；words 命中即挂，长词优先，同一段话里同一条只触发一次。水印不是表演，不在这里。staging 是表情 → 伴随片段：表情挂上的那一刻播一次，让常用表情带上身体动作；片段名必须在 clips.json 里。",
   "cues": [
     { "expression": "blush", "words": ["害羞", "脸红", "不好意思", "呜", "别这样盯着看", "招架不住"] },
     { "expression": "heart", "words": ["比心", "喜欢你", "爱你", "最喜欢", "心意", "把心"] },
@@ -8,5 +8,12 @@
     { "expression": "leek", "words": ["拿葱", "大葱", "葱"] },
     { "expression": "chibi", "words": ["变小的", "QQ人", "小小一只", "变小"] },
     { "expression": "swirl", "words": ["圈圈", "转圈", "晕了", "天旋地转"] }
-  ]
+  ],
+  "staging": {
+    "blush": "pout_puff",
+    "heart": "excited_bounce",
+    "sing": "sway",
+    "lean": "lean_in",
+    "swirl": "look_around"
+  }
 }

@@ -57,3 +57,18 @@ export function missingCueExpressions(
 ): string[] {
   return [...new Set(cues.map((cue) => cue.expression))].filter((name) => !available.has(name)).sort();
 }
+
+/** 表情 → 伴随片段名。表情被挂上的那一刻播一次,让常用表情带上身体动作。 */
+export type ExpressionStaging = Readonly<Record<string, string>>;
+
+/** 把包里的 `staging` 段读成表;形状不对的条目丢掉,不猜。 */
+export function parseStaging(raw: unknown): ExpressionStaging {
+  const staging = (raw as { staging?: unknown } | null)?.staging;
+  if (!staging || typeof staging !== 'object' || Array.isArray(staging)) return {};
+  const out: Record<string, string> = {};
+  for (const [expression, clipId] of Object.entries(staging as Record<string, unknown>)) {
+    if (expression === '' || typeof clipId !== 'string' || clipId === '') continue;
+    out[expression] = clipId;
+  }
+  return out;
+}

@@ -96,6 +96,17 @@ export function parseNumberMap(text: string): Record<string, number> {
   return out;
 }
 
+/**
+ * 数值表里这份模型没有的参数名。这些值每帧都在写一个不存在的参数,静默无效——
+ * 与 `verifyAgainstModel` 是同一条纪律,只是核对的对象从通道落点换成了裸参数名。
+ */
+export function unknownParamNames(
+  values: Readonly<Record<string, number>>,
+  modelParams: ReadonlySet<string>,
+): string[] {
+  return Object.keys(values).filter((name) => !modelParams.has(name)).sort();
+}
+
 export interface ChannelRepair {
   channel: string;
   from: string;

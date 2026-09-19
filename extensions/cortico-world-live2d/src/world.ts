@@ -29,12 +29,13 @@ import {
   parseParamMap,
   repairFromModel,
   resolveChannels,
+  unknownParamNames,
   unmappedChannels,
   verifyAgainstModel,
   type ResolvedChannels,
 } from './channels.ts';
 import { loadPack, type Pack } from './pack.ts';
-import { cueExpression, missingCueExpressions, type ExpressionCue } from './directives.ts';
+import { cueExpression, missingCueExpressions, type ExpressionCue, type ExpressionStaging } from './directives.ts';
 import { expressionForMood, missingExpressions, MOOD_EXPRESSIONS } from './expressions.ts';
 import { Performance } from './performance.ts';
 import { LIVE2D_CONFIG_GROUP, type Live2DConfigSection } from './config.ts';
@@ -162,6 +163,8 @@ export class Live2DWorld implements World {
   private speakingUntilMs = 0;
   /** 包里的措辞 → 表情指令表。 */
   private cues: readonly ExpressionCue[] = [];
+  /** 表情 → 伴随片段;挂载时滤掉这份模型没有的表情。 */
+  private staging: ExpressionStaging = {};
   private lastFrame = '';
   /** 起服务时定下来的模型入口文件名;配置问题在这一刻暴露,不留到有人打开页面。 */
   private modelFile = '';
@@ -248,12 +251,18 @@ export class Live2DWorld implements World {
   /**
    * 把此刻的表情名与它的序号同步一次。名字没变也要能重放同一张表情(她第二次说「害羞」),
    * 所以除名字之外还带一个只增不减的序号,渲染端按序号决定要不要重放。
+   *
+   * 表情换挡的那一刻播它的伴随片段(词触发与心情触发两条路都汇到这里):表情参数与通道
+   * 参数不相交,身体动作叠上去不打架。分类固定为 `staging`,伴随片段之间互相顶替,
+   * 不与词表的片段抢同类位。
    */
   private syncExpression(nowMs: number): string | null {
     const expression = this.resolvedExpression(nowMs);
     if (expression !== this.expression) {
       this.expression = expression;
       this.expressionToken += 1;
+      const clip = expression !== null ? this.staging[expression] : undefined;
+      if (clip !== undefined) this.performance?.play(clip, 'staging', nowMs);
     }
     return expression;
   }
@@ -342,6 +351,11 @@ export class Live2DWorld implements World {
         missing: this.pack.missingClipIds,
       });
     }
+    if (this.pack.missingStagingClipIds.length > 0) {
+      host.log.warn('伴随表提到的片段不在 clips 里,那些表情不会有伴随动作', {
+        missing: this.pack.missingStagingClipIds,
+      });
+    }
 
     // 起服务之前先把配置查完:路径不对、模型点不清,都在挂载时报出来,不留到有人打开页面。
     this.modelFile = this.modelFileName();
@@ -363,6 +377,10 @@ export class Live2DWorld implements World {
       // 模型上没有的表情名不进推流帧:渲染端照名字挂,挂不上的名字只会白白多一次失败。
       this.cues = this.cues.filter((cue) => this.modelExpressions.has(cue.expression));
     }
+    // 伴随表同样只留这份模型认得的表情:挂不上的表情永远不会激活,它的伴随也就永远不会播。
+    this.staging = this.modelExpressions.size > 0
+      ? Object.fromEntries(Object.entries(this.pack.staging).filter(([name]) => this.modelExpressions.has(name)))
+      : this.pack.staging;
     this.mood = this.pendingMood;
     this.moodExpression = expressionForMood(this.mood, this.modelExpressions);
 
@@ -372,6 +390,14 @@ export class Live2DWorld implements World {
     this.paramOverrides = parseNumberMap(this.cfg.paramOverrides);
     this.channels = resolveChannels(this.pack, parseParamMap(this.cfg.paramMap));
     if (modelParams !== null) {
+      // 裸参数名与通道落点过同一道核对:写一个模型没有的参数,每帧都在静默无效。
+      const unknown = [
+        ...unknownParamNames(this.paramOffset, modelParams),
+        ...unknownParamNames(this.paramOverrides, modelParams),
+      ];
+      if (unknown.length > 0) {
+        host.log.warn('配置要钉住的参数这份模型没有,写了也不会生效', { unknown });
+      }
       const repaired = repairFromModel(this.channels, modelParams, this.modelChannelMap());
       this.channels = repaired.channels;
       if (repaired.repairs.length > 0) {
@@ -693,6 +719,8 @@ export class Live2DWorld implements World {
 
   private frame(): string {
     const nowMs = Date.now();
+    // 写入顺序是契约:基线+待机+片段叠加 → 按量程裁剪(channelsAt 内) → 偏移(可越过量程,
+    // 它修的是约定差) → 渲染端先写通道、再写覆盖。后一步可以修前一步,反过来不行。
     const raw = this.performance?.channelsAt(nowMs) ?? {};
     // 包的约定与模型参数的约定不一致时,在合成之后、裁剪之前补上偏移(例:眼睛的"0=平常睁眼"
     // 对不上参数的"1=睁眼")。

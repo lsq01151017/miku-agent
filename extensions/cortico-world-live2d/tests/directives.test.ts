@@ -7,6 +7,7 @@ import {
   cueExpression,
   missingCueExpressions,
   parseCues,
+  parseStaging,
 } from '../src/directives.ts';
 
 describe('parseCues', () => {
@@ -63,5 +64,20 @@ describe('missingCueExpressions', () => {
     });
     expect(missingCueExpressions(cues, new Set(['blush']))).toEqual(['nope']);
     expect(missingCueExpressions(cues, new Set(['blush', 'nope']))).toEqual([]);
+  });
+});
+
+describe('parseStaging', () => {
+  it('读表情 → 伴随片段的表,形状不对的条目丢掉', () => {
+    const staging = parseStaging({
+      staging: { blush: 'pout_puff', '': '空键', heart: 42, sing: '' },
+    });
+    expect(staging).toEqual({ blush: 'pout_puff' });
+  });
+
+  it('没有 staging 段、或不是对象时给空表', () => {
+    expect(parseStaging(null)).toEqual({});
+    expect(parseStaging({})).toEqual({});
+    expect(parseStaging({ staging: ['不是对象'] })).toEqual({});
   });
 });

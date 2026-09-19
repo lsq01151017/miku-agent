@@ -373,6 +373,21 @@ describe('台词即演出指令', () => {
     expect(typeof token).toBe('function');
   });
 
+  it('表情挂上的那一刻播它的伴随片段,新表情的伴随顶掉旧的', async () => {
+    const live = await start({ expressionHoldMs: 60_000 });
+    live.setInternalState({ ...calm, shyness: 0.6 }, '害羞');
+    const shy = await firstFrame(new AbortController().signal) as { expression: string | null; clips: string[] };
+    expect(shy.expression).toBe('blush');
+    expect(shy.clips).toContain('pout_puff');
+
+    // 换心情就是换表情:新表情的伴随片段顶掉旧的(同类同形状),不与词表的片段抢位。
+    live.setInternalState(calm, '开心');
+    const happy = await firstFrame(new AbortController().signal) as { expression: string | null; clips: string[] };
+    expect(happy.expression).toBe('heart');
+    expect(happy.clips).toContain('excited_bounce');
+    expect(happy.clips).not.toContain('pout_puff');
+  });
+
   it('模型没有的表情名不进推流帧,措辞表只留这份模型认得的那几条', async () => {
     const live = await start();
     const payload = await (await fetch(url('/pack/expressions.json'))).json() as {

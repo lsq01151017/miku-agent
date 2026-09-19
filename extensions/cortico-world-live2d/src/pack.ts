@@ -13,7 +13,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseCues, type ExpressionCue } from './directives.ts';
+import { parseCues, parseStaging, type ExpressionCue, type ExpressionStaging } from './directives.ts';
 
 export interface ChannelSpec {
   unit: string;
@@ -76,8 +76,12 @@ export interface Pack {
   vocab: { entries: readonly VocabEntry[]; aliases: Readonly<Record<string, string>> };
   /** 措辞 → 表情的指令表;包不带这份文件时是空表,这一层整层不启用。 */
   cues: readonly ExpressionCue[];
+  /** 表情 → 伴随片段;表情挂上的那一刻播一次。 */
+  staging: ExpressionStaging;
   /** vocab 提到、clips 里没有的片段名。 */
   missingClipIds: readonly string[];
+  /** 伴随表提到、clips 里没有的片段名。 */
+  missingStagingClipIds: readonly string[];
 }
 
 /** 片段在素材包里的形状。行为按它分,不按 vocab 的 `lifecycle`:形状才是数据的事实。 */
@@ -114,7 +118,9 @@ export function loadPack(dir: string): Pack {
   const clips = readJson<ClipGroups>(join(dir, 'clips.json'));
   const raw = readJson<{ entries: VocabEntry[]; aliases?: Record<string, string> }>(join(dir, 'vocab.json'));
   const vocab = { entries: raw.entries ?? [], aliases: raw.aliases ?? {} };
-  const cues = parseCues(readJsonIfPresent(join(dir, 'expressions.json')));
+  const expressionsRaw = readJsonIfPresent(join(dir, 'expressions.json'));
+  const cues = parseCues(expressionsRaw);
+  const staging = parseStaging(expressionsRaw);
 
   const known = new Set([
     ...Object.keys(clips.pulse ?? {}),
@@ -122,13 +128,16 @@ export function loadPack(dir: string): Pack {
     ...Object.keys(clips.gaze ?? {}),
   ]);
   const missingClipIds = [...new Set(vocab.entries.map((e) => e.clipId).filter((id) => !known.has(id)))].sort();
+  const missingStagingClipIds = [...new Set(Object.values(staging).filter((id) => !known.has(id)))].sort();
 
   return {
     params,
     clips: { pulse: clips.pulse ?? {}, sustain: clips.sustain ?? {}, gaze: clips.gaze ?? {} },
     vocab,
     cues,
+    staging,
     missingClipIds,
+    missingStagingClipIds,
   };
 }
 

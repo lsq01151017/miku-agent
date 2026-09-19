@@ -13,6 +13,7 @@ import {
   parseParamMap,
   repairFromModel,
   resolveChannels,
+  unknownParamNames,
   unmappedChannels,
   verifyAgainstModel,
 } from '../src/channels.ts';
@@ -165,5 +166,19 @@ describe('paramMap 的解析', () => {
     expect(parseParamMap('CheekPuff = Paramguzui, FaceAngleZ=\nBodyAngleZ'))
       .toEqual({ CheekPuff: 'Paramguzui', FaceAngleZ: '', BodyAngleZ: '' });
     expect(parseParamMap('')).toEqual({});
+  });
+});
+
+describe('unknownParamNames', () => {
+  it('数值表里模型没有的参数名报出来,排序稳定', () => {
+    const model = new Set(['Param137', 'EyeOpenLeft']);
+    expect(unknownParamNames({ Param137: 1, Param1137: 1, EyeOpenLeft: 1 }, model)).toEqual(['Param1137']);
+    expect(unknownParamNames({ B: 1, A: 2 }, model)).toEqual(['A', 'B']);
+  });
+
+  it('全都在模型里时给空表;空表也安全', () => {
+    const model = new Set(['Param137']);
+    expect(unknownParamNames({ Param137: 1 }, model)).toEqual([]);
+    expect(unknownParamNames({}, model)).toEqual([]);
   });
 });
