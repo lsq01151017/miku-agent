@@ -1,0 +1,6 @@
+# 本机工具缓存(约 1 GB),不属于工程内容
+.toolcache/
+.pnpm-store/
+
+# cortico 的完整历史已并入本仓库,它自己的 .git 目录不进
+cortico/.git/

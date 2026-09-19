@@ -1,0 +1,52 @@
+{
+	"Version": 3,
+	"FileReferences": {
+		"Moc": "miku.moc3",
+		"Textures": [
+			"miku.2048/texture_00.png",
+			"miku.2048/texture_01.png",
+			"miku.2048/texture_02.png",
+			"miku.2048/texture_03.png",
+			"miku.2048/texture_04.png",
+			"miku.2048/texture_05.png"
+		],
+		"Physics": "miku.physics3.json",
+		"DisplayInfo": "miku.cdi3.json",
+		"Motions": {
+			"Idle": [
+				{
+					"File": "Scene1.motion3.json",
+					"FadeInTime": 1.0,
+					"FadeOutTime": 1.0
+				}
+			]
+		},
+		"Expressions": [
+			{ "Name": "blush", "File": "脸红.exp3.json" },
+			{ "Name": "lean", "File": "前倾.exp3.json" },
+			{ "Name": "swirl", "File": "圈圈.exp3.json" },
+			{ "Name": "sing", "File": "唱歌.exp3.json" },
+			{ "Name": "heart", "File": "比心.exp3.json" },
+			{ "Name": "leek", "File": "葱.exp3.json" },
+			{ "Name": "chibi", "File": "QQ人.exp3.json" },
+			{ "Name": "watermark", "File": "水印.exp3.json" }
+		]
+	},
+	"Groups": [
+		{
+			"Target": "Parameter",
+			"Name": "LipSync",
+			"Ids": [
+				"ParamMouthOpenY"
+			]
+		},
+		{
+			"Target": "Parameter",
+			"Name": "EyeBlink",
+			"Ids": [
+				"ParamEyeROpen",
+				"ParamEyeLOpen"
+			]
+		}
+	]
+}

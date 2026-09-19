@@ -1,0 +1,82 @@
+{
+  "values": {
+    "valence": 0.3607,
+    "arousal": 0.5505,
+    "bond": 0.4394,
+    "loneliness": 0.7291,
+    "shyness": 0.1,
+    "empathy": 0.0
+  },
+  "mood": "寂寞",
+  "mood_history": [
+    {
+      "ts": "2026-09-16T14:01:21+08:00",
+      "from": "平静",
+      "to": "元气",
+      "values": {
+        "valence": 0.459,
+        "arousal": 0.702,
+        "bond": 0.1,
+        "loneliness": 0.2,
+        "shyness": 0.1,
+        "empathy": 0.0
+      }
+    },
+    {
+      "ts": "2026-09-16T19:25:32+08:00",
+      "from": "元气",
+      "to": "开心",
+      "values": {
+        "valence": 0.583,
+        "arousal": 0.673,
+        "bond": 0.339,
+        "loneliness": 0.302,
+        "shyness": 0.1,
+        "empathy": 0.0
+      }
+    },
+    {
+      "ts": "2026-09-16T19:40:12+08:00",
+      "from": "开心",
+      "to": "平静",
+      "values": {
+        "valence": 0.471,
+        "arousal": 0.583,
+        "bond": 0.339,
+        "loneliness": 0.364,
+        "shyness": 0.1,
+        "empathy": 0.0
+      }
+    },
+    {
+      "ts": "2026-09-16T19:42:03+08:00",
+      "from": "平静",
+      "to": "元气",
+      "values": {
+        "valence": 0.63,
+        "arousal": 0.883,
+        "bond": 0.429,
+        "loneliness": 0.464,
+        "shyness": 0.1,
+        "empathy": 0.1
+      }
+    },
+    {
+      "ts": "2026-09-17T18:15:22+08:00",
+      "from": "元气",
+      "to": "寂寞",
+      "values": {
+        "valence": 0.361,
+        "arousal": 0.55,
+        "bond": 0.439,
+        "loneliness": 0.729,
+        "shyness": 0.1,
+        "empathy": 0.0
+      }
+    }
+  ],
+  "total_turns": 8,
+  "first_met": "2026-09-16T14:00:08+08:00",
+  "last_seen": "2026-09-16T14:00:08+08:00",
+  "saved_at": "2026-09-17T18:15:22+08:00"
+}

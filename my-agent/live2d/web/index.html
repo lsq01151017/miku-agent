@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>初音未来 · Live2D</title>
+<link rel="stylesheet" href="css/avatar.css">
+</head>
+<body>
+
+<!-- Live2D 画布 -->
+<canvas id="stage"></canvas>
+
+<!-- 背景光晕，用她的代表色 #39C5BB -->
+<div class="glow"></div>
+
+<!-- 左上角：连接状态 -->
+<div id="conn" class="pill pill-conn">
+  <span class="dot"></span><span id="conn-text">连接中…</span>
+</div>
+
+<!-- 右上角：当前行为状态 -->
+<div id="states" class="states">
+  <span class="pill" id="p-thinking">思考中</span>
+  <span class="pill" id="p-acting">查询中</span>
+  <span class="pill" id="p-speaking">说话中</span>
+</div>
+
+<!-- 左下角：内部状态面板（题目里的"可观测性"在表现层的对应物） -->
+<div id="hud" class="hud">
+  <div class="hud-head">
+    <span class="hud-title">内部状态</span>
+    <span class="hud-mood" id="hud-mood">平静</span>
+  </div>
+  <div class="bars" id="hud-bars"></div>
+  <div class="hud-meta">
+    <span id="hud-name"></span>
+    <span id="hud-turn"></span>
+    <span id="hud-route"></span>
+  </div>
+  <div class="hud-tools" id="hud-tools"></div>
+</div>
+
+<!-- 底部字幕 -->
+<div id="subtitle" class="subtitle"></div>
+
+<!-- 右下角工具条 -->
+<div class="toolbar">
+  <label class="zoom">
+    缩放
+    <input id="zoom" type="range" min="40" max="220" value="100">
+    <span id="zoom-val">100%</span>
+  </label>
+  <button id="btn-reset" type="button">复位</button>
+  <button id="btn-exp" type="button">试表情</button>
+</div>
+
+<!-- 报错提示 -->
+<div id="error" class="error hidden"></div>
+
+<!-- Live2D 运行时：pixi.js v6 + 官方 Cubism Core + pixi-live2d-display(Cubism4) -->
+<script src="js/pixi.min.js"></script>
+<script src="js/live2dcubismcore.min.js"></script>
+<script src="js/cubism4.min.js"></script>
+<script src="js/avatar.js"></script>
+</body>
+</html>

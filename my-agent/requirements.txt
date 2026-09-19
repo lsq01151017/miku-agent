@@ -1,0 +1,6 @@
+# Heart Heart Heart — Lv1 + Lv2 依赖
+# 安装：  venv\Scripts\python.exe -m pip install -r requirements.txt
+openai>=1.30
+ollama>=0.3
+python-dotenv>=1.0
+requests>=2.31

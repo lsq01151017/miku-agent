@@ -1,0 +1,30 @@
+{
+  "values": {
+    "valence": 0.6584,
+    "arousal": 0.9525,
+    "bond": 0.2326,
+    "loneliness": 0.2,
+    "shyness": 0.1,
+    "empathy": 0.0
+  },
+  "mood": "元气",
+  "mood_history": [
+    {
+      "ts": "2026-09-16T14:01:21+08:00",
+      "from": "平静",
+      "to": "元气",
+      "values": {
+        "valence": 0.459,
+        "arousal": 0.702,
+        "bond": 0.1,
+        "loneliness": 0.2,
+        "shyness": 0.1,
+        "empathy": 0.0
+      }
+    }
+  ],
+  "total_turns": 4,
+  "first_met": "2026-09-16T14:00:08+08:00",
+  "last_seen": "2026-09-16T14:00:08+08:00",
+  "saved_at": "2026-09-16T14:03:21+08:00"
+}
