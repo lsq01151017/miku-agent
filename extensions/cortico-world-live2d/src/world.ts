@@ -154,9 +154,8 @@ export class Live2DWorld implements World {
   private spokenText = '';
   /** 这一轮已经用过的指令,同一条不重复触发。 */
   private firedCues = new Set<string>();
-  /** 推给页面的表情名与它的序号:名字没变也要能重放同一张表情,所以带序号。 */
+  /** 此刻该挂的表情名;换挡时播它的伴随动作。 */
   private expression: string | null = null;
-  private expressionToken = 0;
   /** 这份模型自带的表情名;读不到就是空集,表情层整层不启用。 */
   private modelExpressions: Set<string> = new Set();
   /** 说到什么时候为止:按字数估的时长,不是音频同步。 */
@@ -165,6 +164,10 @@ export class Live2DWorld implements World {
   private cues: readonly ExpressionCue[] = [];
   /** 表情 → 伴随片段;挂载时滤掉这份模型没有的表情。 */
   private staging: ExpressionStaging = {};
+  /** 每个表情写哪些参数、写多少;从模型自己的 exp3 文件读,页面每帧照写。 */
+  private expressionTable: ReadonlyMap<string, ReadonlyArray<{ id: string; value: number }>> = new Map();
+  /** 所有表情一共会写到的参数:页面每帧先清零这一组,再写当前那张的值。 */
+  private expressionParams: readonly string[] = [];
   private lastFrame = '';
   /** 起服务时定下来的模型入口文件名;配置问题在这一刻暴露,不留到有人打开页面。 */
   private modelFile = '';
@@ -249,20 +252,18 @@ export class Live2DWorld implements World {
   }
 
   /**
-   * 把此刻的表情名与它的序号同步一次。名字没变也要能重放同一张表情(她第二次说「害羞」),
-   * 所以除名字之外还带一个只增不减的序号,渲染端按序号决定要不要重放。
-   *
-   * 表情换挡的那一刻播它的伴随片段(词触发与心情触发两条路都汇到这里):表情参数与通道
-   * 参数不相交,身体动作叠上去不打架。分类固定为 `staging`,伴随片段之间互相顶替,
-   * 不与词表的片段抢同类位。
+   * 把此刻的表情名同步一次;换挡时播它的伴随动作(词触发与心情触发两条路都汇到这里):
+   * 一个片段,外加一组通道值。表情只写开关参数、不改五官,所以通道值才是"看得出来"的那一半。
+   * 分类固定为 `staging`,伴随片段之间互相顶替,不与词表的片段抢同类位。
    */
   private syncExpression(nowMs: number): string | null {
     const expression = this.resolvedExpression(nowMs);
     if (expression !== this.expression) {
       this.expression = expression;
-      this.expressionToken += 1;
-      const clip = expression !== null ? this.staging[expression] : undefined;
-      if (clip !== undefined) this.performance?.play(clip, 'staging', nowMs);
+      const entry = expression !== null ? this.staging[expression] : undefined;
+      if (entry?.clipId !== undefined) this.performance?.play(entry.clipId, 'staging', nowMs);
+      // 通道值走一条持续到下一次表情换挡的伴随基线:表情挂着,五官就一直被它抬着。
+      this.performance?.setStaging(entry?.channels ?? null);
     }
     return expression;
   }
@@ -356,12 +357,20 @@ export class Live2DWorld implements World {
         missing: this.pack.missingStagingClipIds,
       });
     }
+    if (this.pack.unknownStagingChannels.length > 0) {
+      host.log.warn('伴随表的通道值里,包没有抽象这些通道,写下去没有落点', {
+        unknown: this.pack.unknownStagingChannels,
+      });
+    }
 
     // 起服务之前先把配置查完:路径不对、模型点不清,都在挂载时报出来,不留到有人打开页面。
     this.modelFile = this.modelFileName();
 
     // 表情层:用这份模型自带的表情名,表里没有的就不挂。要在定了模型入口之后才读得到。
     this.modelExpressions = this.modelExpressionNames();
+    const table = this.modelExpressionTable();
+    this.expressionTable = table.entries;
+    this.expressionParams = table.params;
     const absent = missingExpressions(this.modelExpressions);
     if (absent.length > 0) {
       host.log.warn('心情表里提到的表情这份模型没有,那几个心情只走通道基线', { missing: absent });
@@ -644,7 +653,6 @@ export class Live2DWorld implements World {
           moodMap: MOOD_EXPRESSIONS,
           cues: this.cues,
           current,
-          expressionToken: this.expressionToken,
           mood: this.mood,
         });
       }
@@ -728,13 +736,17 @@ export class Live2DWorld implements World {
     for (const [channel, offset] of Object.entries(this.paramOffset)) {
       channels[channel] = (channels[channel] ?? 0) + offset;
     }
-    // 表情名没变也要能重放(同一张表情说两次),所以另给一个序号:变了才重新淡入。
     const expression = this.syncExpression(nowMs);
+    // 当前表情要写的参数值:页面每帧先清零整组开关,再写这一份。
+    const expressionValues: Record<string, number> = {};
+    for (const { id, value } of this.expressionTable.get(expression ?? '') ?? []) expressionValues[id] = value;
     return JSON.stringify({
       channels,
       // 表情与通道写的是不相交的参数组,渲染端两样都照做。
       expression,
-      expressionToken: this.expressionToken,
+      // 表情参数由页面每帧写:先清零这一组(所有表情共用的开关),再写当前那张的值。
+      expressionParams: this.expressionParams,
+      expressionValues,
       speaking: nowMs < this.speakingUntilMs,
       // 面板要的那几个数:六个情绪维度、离散心情、此刻做着的片段。
       // 页面拿它们做数值展示,不必再开一条通道。
@@ -805,6 +817,51 @@ export class Live2DWorld implements World {
       this.host?.log.warn('读模型表情表失败,表情层不启用', { err: String(error) });
       return new Set();
     }
+  }
+
+  /**
+   * 每个表情写哪些参数、写多少,从模型自己的 exp3 文件里读。
+   *
+   * 表情是纯参数动作,这一层由页面每帧自己写,不走库的表情队列:`CubismExpressionMotion`
+   * 的时长是 -1,进了队列就永不结束——淡出因子在 `endTime < 0` 时被跳过,结束标记也永不
+   * 置位——于是每挂过一张表情,它的参数就永远按权重 1 叠着。这份模型的唱歌/比心/葱共用
+   * `Param133-135` 各占一位:唱过歌之后再说「比心」,唱歌的开关还在,两个开关同时满足,
+   * 显示成唱歌。库的 `setExpression()` 只写新表情的参数、不先清零旧的,`resetExpression()`
+   * 也只回到模型默认态,都修不掉这个残留;只有每帧先清零再写才修得掉。
+   *
+   * `Multiply` 混合的项不进值表:它乘的是已经被清零的 0,结果就是 0,不必写。
+   */
+  private modelExpressionTable(): {
+    entries: Map<string, Array<{ id: string; value: number }>>;
+    params: string[];
+  } {
+    const entries = new Map<string, Array<{ id: string; value: number }>>();
+    const ids = new Set<string>();
+    try {
+      const dir = this.resolveDir(this.cfg.modelDir, '模型');
+      const model3 = JSON.parse(readFileSync(join(dir, this.modelFile), 'utf8')) as {
+        FileReferences?: { Expressions?: Array<{ Name?: string; File?: string }> };
+      };
+      for (const entry of model3.FileReferences?.Expressions ?? []) {
+        if (typeof entry.Name !== 'string' || entry.Name === '') continue;
+        if (typeof entry.File !== 'string' || entry.File === '') continue;
+        const exp3 = JSON.parse(readFileSync(join(dir, entry.File), 'utf8')) as {
+          Parameters?: Array<{ Id?: string; Value?: number; Blend?: string }>;
+        };
+        const values: Array<{ id: string; value: number }> = [];
+        for (const param of exp3.Parameters ?? []) {
+          if (typeof param.Id !== 'string' || param.Id === '') continue;
+          ids.add(param.Id);
+          if (param.Blend === 'Multiply') continue;
+          if (typeof param.Value !== 'number' || !Number.isFinite(param.Value)) continue;
+          values.push({ id: param.Id, value: param.Value });
+        }
+        entries.set(entry.Name, values);
+      }
+    } catch (error) {
+      this.host?.log.warn('读表情参数表失败,表情不会切换(可能串台)', { err: String(error) });
+    }
+    return { entries, params: [...ids].sort() };
   }
 
   /**

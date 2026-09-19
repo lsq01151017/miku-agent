@@ -82,6 +82,8 @@ export interface Pack {
   missingClipIds: readonly string[];
   /** 伴随表提到、clips 里没有的片段名。 */
   missingStagingClipIds: readonly string[];
+  /** 伴随表的通道值里、`params.json` 没有抽象的通道名。 */
+  unknownStagingChannels: readonly string[];
 }
 
 /** 片段在素材包里的形状。行为按它分,不按 vocab 的 `lifecycle`:形状才是数据的事实。 */
@@ -128,7 +130,14 @@ export function loadPack(dir: string): Pack {
     ...Object.keys(clips.gaze ?? {}),
   ]);
   const missingClipIds = [...new Set(vocab.entries.map((e) => e.clipId).filter((id) => !known.has(id)))].sort();
-  const missingStagingClipIds = [...new Set(Object.values(staging).filter((id) => !known.has(id)))].sort();
+  const missingStagingClipIds = [...new Set(
+    Object.values(staging).map((entry) => entry.clipId).filter((id): id is string => id !== undefined && !known.has(id)),
+  )].sort();
+  // 伴随通道值里包没抽象的通道:写下去也没有落点,报出来。
+  const knownChannels = new Set(Object.keys(params));
+  const unknownStagingChannels = [...new Set(
+    Object.values(staging).flatMap((entry) => Object.keys(entry.channels ?? {})).filter((name) => !knownChannels.has(name)),
+  )].sort();
 
   return {
     params,
@@ -138,6 +147,7 @@ export function loadPack(dir: string): Pack {
     staging,
     missingClipIds,
     missingStagingClipIds,
+    unknownStagingChannels,
   };
 }
 

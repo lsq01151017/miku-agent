@@ -54,7 +54,8 @@ beforeEach(() => {
   for (const name of ['pixi.min.js', 'live2dcubismcore.min.js', 'cubism4.min.js']) {
     writeFileSync(join(webDir, 'js', name), `/* ${name} */`, 'utf8');
   }
-  // 模型替身带上四个情绪表情,让表情层在测试里也是活的。
+  // 模型替身带上四个情绪表情,让表情层在测试里也是活的。exp3 照真实模型的写法:
+  // 唱歌/比心共用 Param133-135 各占一位——表情串台正是从这种共用来的。
   writeFileSync(
     join(modelDir, 'miku.model3.json'),
     JSON.stringify({
@@ -65,6 +66,15 @@ beforeEach(() => {
     }),
     'utf8',
   );
+  const exp3s: Record<string, Array<{ Id: string; Value: number; Blend: string }>> = {
+    blush: [{ Id: 'Param130', Value: 1, Blend: 'Add' }],
+    lean: [{ Id: 'Param132', Value: 1, Blend: 'Add' }],
+    sing: [{ Id: 'Param133', Value: 0, Blend: 'Add' }, { Id: 'Param134', Value: 1, Blend: 'Add' }, { Id: 'Param135', Value: 0, Blend: 'Add' }],
+    heart: [{ Id: 'Param133', Value: 0, Blend: 'Add' }, { Id: 'Param134', Value: 0, Blend: 'Add' }, { Id: 'Param135', Value: 1, Blend: 'Add' }],
+  };
+  for (const [name, parameters] of Object.entries(exp3s)) {
+    writeFileSync(join(modelDir, `${name}.exp3.json`), JSON.stringify({ Type: 'Live2D Expression', Parameters: parameters }), 'utf8');
+  }
   writeFileSync(join(root, 'secret.txt'), '不该被读到', 'utf8');
   // 0 = 让系统挑一个空闲端口;`start()` 起完会把它换成实际端口。
   port = 0;
@@ -349,28 +359,22 @@ describe('台词即演出指令', () => {
     expect(expired.current).toBe('sing');
   });
 
-  it('同一段话里同一条指令只触发一次,序号随之增加', async () => {
-    const live = await start({ expressionHoldMs: 60_000 });
+  it('同一段话里同一条指令只触发一次:过期后不因再次命中而续期', async () => {
+    const live = await start({ expressionHoldMs: 80 });
     const tap = live.outputTap();
-    const token = async (): Promise<number> =>
-      (await (await fetch(url('/pack/expressions.json'))).json() as { token?: number }).token ?? -1;
+    const read = async (): Promise<string | null> =>
+      (await firstFrame(new AbortController().signal) as { expression: string | null }).expression;
 
-    const controller = new AbortController();
-    const before = await firstFrame(controller.signal) as { expression: string | null; expressionToken: number };
-    controller.abort();
-    expect(before.expression).toBeNull();
+    expect(await read()).toBeNull();
 
     tap.onEvent({ type: 'response.output_text.delta', delta: '我有点害' } as never);
     tap.onEvent({ type: 'response.output_text.delta', delta: '羞' } as never);
-    const first = await firstFrame(new AbortController().signal) as { expression: string | null; expressionToken: number };
-    expect(first.expression).toBe('blush');
+    expect(await read()).toBe('blush');
 
-    // 同一段话里又说了一次「害羞」:不重放。
+    // 指令已过期(80ms),回到没有表情的心情;同一句话里又说了一次「害羞」,不该重新触发。
+    await new Promise((done) => setTimeout(done, 250));
     tap.onEvent({ type: 'response.output_text.delta', delta: '真的很害羞' } as never);
-    const again = await firstFrame(new AbortController().signal) as { expression: string | null; expressionToken: number };
-    expect(again.expression).toBe('blush');
-    expect(again.expressionToken).toBe(first.expressionToken);
-    expect(typeof token).toBe('function');
+    expect(await read()).toBeNull();
   });
 
   it('表情挂上的那一刻播它的伴随片段,新表情的伴随顶掉旧的', async () => {
@@ -386,6 +390,24 @@ describe('台词即演出指令', () => {
     expect(happy.expression).toBe('heart');
     expect(happy.clips).toContain('excited_bounce');
     expect(happy.clips).not.toContain('pout_puff');
+  });
+
+  it('推流帧带表情参数:整组开关的清单,与当前表情要写的值', async () => {
+    const live = await start();
+    live.setInternalState({ ...calm, shyness: 0.6 }, '害羞');
+    const frame = await firstFrame(new AbortController().signal) as {
+      expression: string | null; expressionParams: string[]; expressionValues: Record<string, number>;
+    };
+    expect(frame.expression).toBe('blush');
+    // 清单是四个表情一共会写到的参数;值只有当前这张的。
+    expect(frame.expressionParams).toEqual(['Param130', 'Param132', 'Param133', 'Param134', 'Param135']);
+    expect(frame.expressionValues).toEqual({ Param130: 1 });
+
+    // 换到比心:唱歌一路的开关不在值里,由每帧的清零兜着——串台就是这么修的。
+    live.setInternalState(calm, '开心');
+    const happy = await firstFrame(new AbortController().signal) as typeof frame;
+    expect(happy.expression).toBe('heart');
+    expect(happy.expressionValues).toEqual({ Param133: 0, Param134: 0, Param135: 1 });
   });
 
   it('模型没有的表情名不进推流帧,措辞表只留这份模型认得的那几条', async () => {

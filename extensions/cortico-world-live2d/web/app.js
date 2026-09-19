@@ -89,8 +89,10 @@
   var current = {};  // 平滑后的当前值
   var speaking = false;
   var speakStart = 0;
-  var lastExpression = null;
-  var lastExpressionToken = -1;
+  // 表情参数:整组开关的清单(每帧先清零),与当前表情要写的值。都由 World 从模型自己的
+  // exp3 推导下发,这里不写死参数名。
+  var expressionParams = null;
+  var expressionValues = null;
   // 不归通道管的参数定值(例如模型的水印开关),每帧照写一次,免得被表情或动作改回去。
   var overrides = {};
   // 模型自己的眨眼参数:这几路的开合归眨眼逻辑,通道值只在它上面叠加,不覆盖它。
@@ -644,10 +646,11 @@
   }
 
   /**
-   * 每帧写一次参数:通道值 + 眼神跟随 + 参数定值。
+   * 每帧写一次参数:通道值 + 眼神跟随 + 表情开关 + 参数定值。
    *
-   * 写入顺序是契约:通道(赋值;眨眼与口型走加法) → 眼神跟随(加法) → 参数定值(赋值,
-   * 最后写,只赢它点名的参数)。后一步可以叠加或覆盖前一步,反过来不行。
+   * 写入顺序是契约:通道(赋值;眨眼与口型走加法) → 眼神跟随(加法) → 表情开关(先清零
+   * 整组,再写当前那张的值) → 参数定值(赋值,最后写,只赢它点名的参数)。后一步可以叠加
+   * 或覆盖前一步,反过来不行。
    *
    * 模型没有的参数(缺件)静默跳过,那正是 `losesIfMissing` 说的。眨眼参数与眼神跟随走加法
    * (叠加在通道值上),其余走赋值。
@@ -685,6 +688,18 @@
       addParam(core, lookParams.eyeY, -look.y * LOOK_EYE_RANGE);
       addParam(core, lookParams.headX, look.x * LOOK_HEAD_DEG);
       addParam(core, lookParams.headY, -look.y * LOOK_HEAD_DEG);
+    }
+    // 表情开关:先清零整组,再写当前那张的值。库的表情队列永不结束,挂过的表情会一直
+    // 叠着(唱歌的开关残留,比心就显示成唱歌),所以这一层不走库,每帧自己写。
+    if (expressionParams) {
+      for (var i = 0; i < expressionParams.length; i++) {
+        try { core.setParameterValueById(expressionParams[i], 0); } catch (e) { /* 模型没有这条参数 */ }
+      }
+    }
+    if (expressionValues) {
+      Object.keys(expressionValues).forEach(function (param) {
+        try { core.setParameterValueById(param, expressionValues[param]); } catch (e) { /* 同上 */ }
+      });
     }
     Object.keys(overrides).forEach(function (param) {
       try { core.setParameterValueById(param, overrides[param]); } catch (e) { /* 同上 */ }
@@ -737,6 +752,8 @@
     source.onmessage = function (event) {
       var payload = JSON.parse(event.data);
       target = payload.channels || {};
+      expressionParams = payload.expressionParams || null;
+      expressionValues = payload.expressionValues || null;
       var nowSpeaking = Boolean(payload.speaking);
       if (nowSpeaking && !speaking) {
         speakStart = performance.now();
@@ -744,7 +761,6 @@
         if (!useAgent) beginSubtitle();
       }
       speaking = nowSpeaking;
-      applyExpression(payload.expression || null, payload.expressionToken);
       showState(payload);
     };
   }
@@ -758,32 +774,6 @@
     if (el.clients) el.clients.textContent = String(payload.clients == null ? 0 : payload.clients);
     updateBars(payload.emotion);
     updateChannels(payload.channels || {});
-  }
-
-  /**
-   * 表情层:World 给出此刻该挂的那张模型自带表情——先是她台词命中的,过期回到心情那张。
-   *
-   * 表情与通道写的是不相交的参数组(表情只写 Param125/Param130-137),所以两样都照做,
-   * 谁也不覆盖谁。名字与序号都比一遍:同一张表情说第二次时名字没变,序号变了,那也要重放。
-   */
-  function applyExpression(name, token) {
-    var stamp = token === undefined ? null : token;
-    if (name === lastExpression && stamp === lastExpressionToken) return;
-    lastExpression = name;
-    lastExpressionToken = stamp;
-    try {
-      if (!model || typeof model.expression !== 'function') return;
-      if (name) {
-        model.expression(name);
-        return;
-      }
-      var manager = model.internalModel && model.internalModel.motionManager
-        && model.internalModel.motionManager.expressionManager;
-      if (manager && typeof manager.resetExpression === 'function') manager.resetExpression();
-    } catch (e) {
-      // 不接管连接提示条:表情切不动不该让人以为整个页面坏了。
-      console.warn('[live2d] 表情切换失败', name, e);
-    }
   }
 
   boot();

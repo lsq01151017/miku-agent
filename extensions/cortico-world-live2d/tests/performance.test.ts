@@ -33,6 +33,15 @@ describe('素材包读取', () => {
     expect(pack.vocab.entries.find((e) => e.clipId === 'smile')!.lifecycle).toBe('state');
     expect(pack.vocab.entries.find((e) => e.clipId === 'camera')!.lifecycle).toBe('state');
   });
+
+  it('伴随表齐全:片段都在 clips 里,通道值都在 params 里,且带五官通道值', () => {
+    const pack = loadPack(PACK_DIR);
+    expect(pack.missingStagingClipIds).toEqual([]);
+    expect(pack.unknownStagingChannels).toEqual([]);
+    // 表情只写开关参数、不改五官,伴随通道值才是"看得出来"的那一半。
+    expect(pack.staging.blush!.channels!.MouthSmile).toBeGreaterThan(0);
+    expect(pack.staging.heart!.channels!.MouthSmile).toBeGreaterThan(0);
+  });
 });
 
 describe('内部状态驱动的基线', () => {
@@ -184,6 +193,18 @@ describe('表现引擎', () => {
     expect(performance.channelsAt(0)).toMatchObject({ MouthSmile: 0.2 });
   });
 
+  it('表情的伴随通道值叠在基线上,换表情就换掉,表情结束就清掉', () => {
+    const performance = new Performance(pack, { idleAmount: 0 });
+    performance.setBaseline({ MouthSmile: 0.2 });
+    performance.setStaging({ MouthSmile: 0.45, EyeOpenLeft: -0.35 });
+    expect(performance.channelsAt(0)).toMatchObject({ MouthSmile: 0.65, EyeOpenLeft: -0.35 });
+    // 换挡是替换,不是累加。
+    performance.setStaging({ MouthSmile: 0.7 });
+    expect(performance.channelsAt(0).MouthSmile).toBe(0.9);
+    performance.setStaging(null);
+    expect(performance.channelsAt(0)).toMatchObject({ MouthSmile: 0.2 });
+  });
+
   it('待机动作一直在:没有片段时通道也随时间变,同一时刻算出同一组值', () => {
     const performance = new Performance(pack);
     const a = performance.channelsAt(1000);
@@ -239,5 +260,20 @@ describe('读一份坏包', () => {
     dir = mkdtempSync(join(tmpdir(), 'pack-'));
     writeFileSync(join(dir, 'params.json'), '{}', 'utf8');
     expect(() => loadPack(dir)).toThrow();
+  });
+
+  it('伴随表的缺口列出来:片段不在 clips 里、通道不在 params 里', () => {
+    dir = mkdtempSync(join(tmpdir(), 'pack-'));
+    writeFileSync(join(dir, 'params.json'), JSON.stringify({
+      MouthSmile: { unit: '[-1,1]', range: [-1, 1], suggests: 'ParamMouthForm', losesIfMissing: '' },
+    }), 'utf8');
+    writeFileSync(join(dir, 'clips.json'), JSON.stringify({ pulse: {}, sustain: {}, gaze: {} }), 'utf8');
+    writeFileSync(join(dir, 'vocab.json'), JSON.stringify({ entries: [], aliases: {} }), 'utf8');
+    writeFileSync(join(dir, 'expressions.json'), JSON.stringify({
+      staging: { blush: { clipId: '不存在的片段', channels: { 不存在的通道: 1 } } },
+    }), 'utf8');
+    const pack = loadPack(dir);
+    expect(pack.missingStagingClipIds).toEqual(['不存在的片段']);
+    expect(pack.unknownStagingChannels).toEqual(['不存在的通道']);
   });
 });

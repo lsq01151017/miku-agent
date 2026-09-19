@@ -83,6 +83,8 @@ export class Performance {
   private charsSinceAccent = 0;
   /** 从"还没说过话"开始:第一句永远算新的一句。 */
   private lastSpokeAtMs = Number.NEGATIVE_INFINITY;
+  /** 表情的伴随通道值;跟着表情的寿命走,由 `setStaging` 替换。 */
+  private staging: ChannelValues = {};
 
   constructor(private readonly pack: Pack, opts: Partial<PerformanceOptions> = {}) {
     this.opts = { ...PERFORMANCE_DEFAULTS, ...opts };
@@ -96,6 +98,16 @@ export class Performance {
 
   getBaseline(): ChannelValues {
     return { ...this.baseline };
+  }
+
+  /**
+   * 表情的伴随通道值:表情挂着期间一直叠在基线上,换表情或表情结束就换掉。
+   *
+   * 表情本身只写开关参数、不改五官,所以"看得出来"要靠这一层。它与片段不同:片段有
+   * 自己的时长与形状,这一层跟着表情的寿命走,由 `syncExpression` 在换挡时替换。
+   */
+  setStaging(channels: ChannelValues | null): void {
+    this.staging = channels === null ? {} : { ...channels };
   }
 
   activeClips(nowMs: number): ActiveClip[] {
@@ -212,11 +224,14 @@ export class Performance {
     };
   }
 
-  /** 此刻的通道值:基线 + 待机动作 + 活动片段,按量程裁剪。顺带清掉已经结束的片段。 */
+  /** 此刻的通道值:基线 + 待机动作 + 活动片段 + 表情伴随,按量程裁剪。顺带清掉已经结束的片段。 */
   channelsAt(nowMs: number): ChannelValues {
     this.prune(nowMs);
     const out: ChannelValues = { ...this.baseline };
     for (const [channel, value] of Object.entries(this.idleChannels(nowMs))) {
+      out[channel] = (out[channel] ?? 0) + value;
+    }
+    for (const [channel, value] of Object.entries(this.staging)) {
       out[channel] = (out[channel] ?? 0) + value;
     }
     for (const clip of this.active) {
@@ -278,7 +293,7 @@ export class Performance {
     this.active = this.active.filter((clip) => this.weightOf(clip, nowMs - clip.startedAtMs) > 0);
   }
 
-  /** 全部清掉,回到只剩基线的状态(交接、停止、被打断时用)。 */
+  /** 清掉活动片段,回到基线与表情伴随(交接、停止、被打断时用)。 */
   clear(): void {
     this.active = [];
   }

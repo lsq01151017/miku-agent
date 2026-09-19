@@ -58,17 +58,50 @@ export function missingCueExpressions(
   return [...new Set(cues.map((cue) => cue.expression))].filter((name) => !available.has(name)).sort();
 }
 
-/** 表情 → 伴随片段名。表情被挂上的那一刻播一次,让常用表情带上身体动作。 */
-export type ExpressionStaging = Readonly<Record<string, string>>;
+/**
+ * 表情的伴随动作:一个片段,外加一组通道值。
+ *
+ * 表情只写开关参数(这份模型的脸红只写 `Param130`),它切换的是贴图/部件,不改五官——
+ * 所以单挂表情时脸几乎不动。通道值让伴随动作同时驱动五官,表情才看得出来。
+ * 片段名与通道名都要在包里真实存在,读取时核对,对不上就报。
+ */
+export interface ExpressionStagingEntry {
+  /** 伴随片段名,可省。 */
+  clipId?: string;
+  /** 伴随通道值;键是 `params.json` 里的抽象通道。 */
+  channels?: Readonly<Record<string, number>>;
+}
+
+export type ExpressionStaging = Readonly<Record<string, ExpressionStagingEntry>>;
 
 /** 把包里的 `staging` 段读成表;形状不对的条目丢掉,不猜。 */
 export function parseStaging(raw: unknown): ExpressionStaging {
   const staging = (raw as { staging?: unknown } | null)?.staging;
   if (!staging || typeof staging !== 'object' || Array.isArray(staging)) return {};
-  const out: Record<string, string> = {};
-  for (const [expression, clipId] of Object.entries(staging as Record<string, unknown>)) {
-    if (expression === '' || typeof clipId !== 'string' || clipId === '') continue;
-    out[expression] = clipId;
+  const out: Record<string, ExpressionStagingEntry> = {};
+  for (const [expression, value] of Object.entries(staging as Record<string, unknown>)) {
+    if (expression === '') continue;
+    // 旧写法:值直接是片段名。
+    if (typeof value === 'string') {
+      if (value !== '') out[expression] = { clipId: value };
+      continue;
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const entry = value as { clipId?: unknown; channels?: unknown };
+    const clipId = typeof entry.clipId === 'string' && entry.clipId !== '' ? entry.clipId : undefined;
+    const channels: Record<string, number> = {};
+    if (entry.channels && typeof entry.channels === 'object' && !Array.isArray(entry.channels)) {
+      for (const [channel, amount] of Object.entries(entry.channels as Record<string, unknown>)) {
+        if (channel === '' || typeof amount !== 'number' || !Number.isFinite(amount)) continue;
+        channels[channel] = amount;
+      }
+    }
+    const hasChannels = Object.keys(channels).length > 0;
+    if (clipId === undefined && !hasChannels) continue;
+    out[expression] = {
+      ...(clipId === undefined ? {} : { clipId }),
+      ...(hasChannels ? { channels } : {}),
+    };
   }
   return out;
 }

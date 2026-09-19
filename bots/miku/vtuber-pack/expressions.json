@@ -10,10 +10,25 @@
     { "expression": "swirl", "words": ["圈圈", "转圈", "晕了", "天旋地转"] }
   ],
   "staging": {
-    "blush": "pout_puff",
-    "heart": "excited_bounce",
-    "sing": "sway",
-    "lean": "lean_in",
-    "swirl": "look_around"
+    "blush": {
+      "clipId": "pout_puff",
+      "channels": { "MouthSmile": 0.45, "EyeOpenLeft": -0.35, "EyeOpenRight": -0.35, "FaceAngleZ": 6, "FaceAngleY": 4 }
+    },
+    "heart": {
+      "clipId": "excited_bounce",
+      "channels": { "MouthSmile": 0.7, "EyeOpenLeft": 0.25, "EyeOpenRight": 0.25, "BrowLeftY": 0.3, "BrowRightY": 0.3 }
+    },
+    "sing": {
+      "clipId": "sway",
+      "channels": { "MouthSmile": 0.5, "EyeOpenLeft": 0.15, "EyeOpenRight": 0.15, "FaceAngleZ": -4 }
+    },
+    "lean": {
+      "clipId": "lean_in",
+      "channels": { "MouthSmile": 0.35, "EyeOpenLeft": -0.2, "EyeOpenRight": -0.2, "FaceAngleY": -5 }
+    },
+    "swirl": {
+      "clipId": "look_around",
+      "channels": { "EyeRightX": 0.6, "EyeRightY": 0.4, "FaceAngleZ": 10, "BrowLeftY": -0.3, "BrowRightY": -0.3 }
+    }
   }
 }

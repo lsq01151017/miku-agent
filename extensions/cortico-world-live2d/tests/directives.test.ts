@@ -68,11 +68,28 @@ describe('missingCueExpressions', () => {
 });
 
 describe('parseStaging', () => {
-  it('读表情 → 伴随片段的表,形状不对的条目丢掉', () => {
+  it('伴随动作读成 {片段, 通道值};旧写法(直接给片段名)也认,形状不对的条目丢掉', () => {
     const staging = parseStaging({
-      staging: { blush: 'pout_puff', '': '空键', heart: 42, sing: '' },
+      staging: {
+        blush: 'pout_puff',
+        heart: { clipId: 'excited_bounce', channels: { MouthSmile: 0.7, FaceAngleZ: '不是数字', BrowLeftY: Infinity } },
+        sing: { channels: { MouthSmile: 0.5 } },
+        lean: { clipId: 'lean_in', channels: {} },
+        swirl: 42,
+        '': '空键',
+      },
     });
-    expect(staging).toEqual({ blush: 'pout_puff' });
+    expect(staging).toEqual({
+      blush: { clipId: 'pout_puff' },
+      heart: { clipId: 'excited_bounce', channels: { MouthSmile: 0.7 } },
+      sing: { channels: { MouthSmile: 0.5 } },
+      lean: { clipId: 'lean_in' },
+    });
+  });
+
+  it('片段与通道值都没有的条目丢掉:伴随动作至少要有一样', () => {
+    const staging = parseStaging({ staging: { swirl: {}, heart: { clipId: '', channels: [] } } });
+    expect(staging).toEqual({});
   });
 
   it('没有 staging 段、或不是对象时给空表', () => {

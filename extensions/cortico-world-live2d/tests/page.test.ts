@@ -28,10 +28,9 @@ interface FakeNode {
   fire: (type: string, event?: Record<string, unknown>) => void;
 }
 
-/** 一次性的浏览器替身:记录页面写进模型的参数、切过的表情、面板上的数与取景,以及对话框。 */
+/** 一次性的浏览器替身:记录页面写进模型的参数、面板上的数与取景,以及对话框。 */
 function stubBrowser(): {
   written: Written[];
-  expressions: string[];
   scales: number[];
   positions: Array<{ x: number; y: number }>;
   nodes: Map<string, FakeNode>;
@@ -44,7 +43,6 @@ function stubBrowser(): {
   pump: (frames: number) => void;
 } {
   const written: Written[] = [];
-  const expressions: string[] = [];
   const scales: number[] = [];
   const positions: Array<{ x: number; y: number }> = [];
   const nodes = new Map<string, FakeNode>();
@@ -107,7 +105,6 @@ function stubBrowser(): {
         if (event === 'beforeModelUpdate') beforeModelUpdate = handler;
       },
     },
-    expression: (name: string) => { expressions.push(name); },
   };
 
   const globals = globalThis as Record<string, unknown>;
@@ -184,7 +181,7 @@ function stubBrowser(): {
   globals.EventSource = FakeEventSource;
 
   return {
-    written, expressions, scales, positions, nodes, stored, instances, sockets,
+    written, scales, positions, nodes, stored, instances, sockets,
     fireWindow: (type: string, event: Record<string, unknown>) => {
       for (const fn of windowHandlers[type] ?? []) fn(event);
     },
@@ -230,7 +227,8 @@ describe('播放器页面', () => {
     send({
       channels: { FaceAngleZ: 12, MouthSmile: 0.5, MouthOpen: 0.9, EyeOpenLeft: 0.2, EyeLeftX: 0.9 },
       expression: 'blush',
-      expressionToken: 1,
+      expressionParams: ['Param130', 'Param133', 'Param134', 'Param135'],
+      expressionValues: { Param130: 1 },
       speaking: false,
       emotion: { valence: 0.5, arousal: 0.6, bond: 0.2, loneliness: 0.1, shyness: 0.62, empathy: 0 },
       mood: '害羞',
@@ -240,7 +238,9 @@ describe('播放器页面', () => {
     stubs.pump(6);
 
     // ── 参数 ────────────────────────────────────────────────────────────────
-    expect(stubs.expressions).toEqual(['blush']);
+    // 表情参数每帧自己写:整组开关先清零,再写当前那张的值。
+    expect(last('Param130')).toBe(1);
+    expect(last('Param134')).toBe(0);
     // 平滑是渐进的:推 6 帧之后应当已经朝目标走了一段,但还没到 12。
     expect(last('ParamAngleZ')).toBeGreaterThan(0);
     expect(last('ParamAngleZ')).toBeLessThan(12);
@@ -392,11 +392,24 @@ describe('播放器页面', () => {
     const maxOffsetX = 1600;
     expect(Math.abs(Number(node('offset-x-val').textContent))).toBeLessThanOrEqual(maxOffsetX);
 
-    // ── 表情按序号重放 ──────────────────────────────────────────────────────
-    send({ channels: { MouthSmile: 0.5 }, expression: 'blush', expressionToken: 1, speaking: false });
-    send({ channels: { MouthSmile: 0.5 }, expression: 'blush', expressionToken: 2, speaking: false });
-    send({ channels: { MouthSmile: 0.5 }, expression: null, expressionToken: 3, speaking: false });
-    expect(stubs.expressions).toEqual(['blush', 'blush']);
+    // ── 表情换挡:上一张的开关每帧先清零,不残留 ────────────────────────────
+    stubs.written.length = 0;
+    send({
+      channels: { MouthSmile: 0.5 }, speaking: false, expression: 'sing',
+      expressionParams: ['Param130', 'Param133', 'Param134', 'Param135'],
+      expressionValues: { Param134: 1 },
+    });
+    stubs.pump(2);
+    send({
+      channels: { MouthSmile: 0.5 }, speaking: false, expression: 'heart',
+      expressionParams: ['Param130', 'Param133', 'Param134', 'Param135'],
+      expressionValues: { Param133: 0, Param134: 0, Param135: 1 },
+    });
+    stubs.pump(2);
+    // 唱歌的 Param134 被清零,比心的 Param135 写上:两个开关不同时满足,不串台。
+    expect(last('Param134')).toBe(0);
+    expect(last('Param135')).toBe(1);
+    expect(node('expression').textContent).toBe('heart');
     expect(node('speaking').textContent).toBe('否');
     expect(node('clips').textContent).toBe('—');
   });
