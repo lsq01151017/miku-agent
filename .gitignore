@@ -36,8 +36,12 @@ scratch/
 # 本仓自带的 provider 扩展随源码入库;git 无法在被排除的目录内重新纳入文件,
 # 所以先排除目录内容,再单独放开这几个包。
 /extensions/*
+!/extensions/cortico-provider-chat/
 !/extensions/cortico-provider-ollama/
 !/extensions/cortico-world-live2d/
+# extensions/ 得是自己的安装根:没有它,pnpm 向上找到仓库根的 pnpm-workspace.yaml,
+# 把 cortico/ 当项目根,这里的依赖永远 "Already up to date"。
+!/extensions/pnpm-workspace.yaml
 
 # Corti 运维目录(数据归档+复盘),不入库
 CortiV-DataAnalysis/
