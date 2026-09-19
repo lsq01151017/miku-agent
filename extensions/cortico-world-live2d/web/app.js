@@ -71,7 +71,6 @@
     history: document.getElementById('btn-history'),
     panelMore: document.getElementById('panel-more'),
     panelMoreButton: document.getElementById('btn-panel'),
-    probe: document.getElementById('probe'),
   };
 
   function why(message) {
@@ -433,31 +432,6 @@
     }
   }
 
-  /**
-   * 拖动时浏览器到底做了什么(临时)。一行字报出按下的元素,以及几个原生事件各发生了几次:
-   * 有 dragstart 说明是浏览器的原生拖拽,没有就说明影子不是拖出来的。排查完删掉。
-   */
-  function bindDragProbe() {
-    if (!document.addEventListener) return;
-    var counts = { pointerdown: 0, dragstart: 0, drag: 0, dragend: 0, selectstart: 0 };
-    var target = '—';
-    var paint = function () {
-      if (!el.probe) return;
-      el.probe.textContent = '按下 ' + target + ' · dragstart ' + counts.dragstart +
-        ' · drag ' + counts.drag + ' · dragend ' + counts.dragend +
-        ' · selectstart ' + counts.selectstart;
-    };
-    Object.keys(counts).forEach(function (name) {
-      document.addEventListener(name, function (event) {
-        counts[name] += 1;
-        var node = (event && event.target) || {};
-        target = String(node.tagName || '?').toLowerCase() + (node.id ? '#' + node.id : '');
-        paint();
-      }, true);
-    });
-    paint();
-  }
-
   /** 面板的「更多」:情绪那几条常显,其余收起,用时展开;记住上次的选择。 */
   function bindPanelMore() {
     if (!el.panelMore || !el.panelMoreButton) return;
@@ -636,7 +610,6 @@
     lookParams = resolveLookParams();
     applyTransform();
     bindControls();
-    bindDragProbe();
     bindPanelMore();
     bindLook();
     bindComposer();

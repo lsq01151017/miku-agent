@@ -24,7 +24,6 @@
   #hit.dragging { cursor: grabbing; }
   /* 覆层盖住整页,面板、输入区、提示要压在它上面才点得到。 */
   #conn, #talk, #why, #bottom, #panel { z-index: 3; }
-  #probe { color: var(--glass-accent); font: 11px/1.5 ui-monospace, monospace; }
 
   .glass {
     background: var(--glass-bg);
@@ -138,7 +137,7 @@
 <canvas id="stage" draggable="false"></canvas>
 <div id="hit"></div>
 <div id="conn" class="glass">连接中…</div>
-<div id="talk" class="glass">这一页是她的身体。<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话。拖动画面可以挪动她。<br><span id="probe">—</span></div>
+<div id="talk" class="glass">这一页是她的身体。<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话。拖动画面可以挪动她。</div>
 <div id="why"></div>
 
 <!-- 底部一栏:她的字幕在上,我发过的话与输入框在下。 -->
