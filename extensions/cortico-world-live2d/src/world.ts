@@ -642,7 +642,7 @@ export class Live2DWorld implements World {
   private sendPage(res: ServerResponse): void {
     const html = readFileSync(join(WEB_DIR, 'index.html'), 'utf8')
       .replace('</head>', `<script>window.${MODEL_FILE_GLOBAL} = ${JSON.stringify(this.modelFile)};</script>\n</head>`);
-    // 页面与脚本每次都现读现发:改完源码刷新一次就是新的,不会出现"新的 app.js 配旧的 index.html"。
+    // 页面保持 no-store:入口永远现读现发,不会拿旧的 index.html 去配新的 app.js。
     res.writeHead(200, { 'Content-Type': CONTENT_TYPES['.html']!, 'Cache-Control': 'no-store' }).end(html);
   }
 
@@ -651,14 +651,22 @@ export class Live2DWorld implements World {
       .end(JSON.stringify(value));
   }
 
+  // 静态文件带 ETag 复验:改动的文件换 ETag、刷新即见新文;未改动的回 304,重复打开免重传。
   private sendFile(res: ServerResponse, path: string): void {
-    if (!existsSync(path) || !statSync(path).isFile()) {
+    const stat = existsSync(path) ? statSync(path) : undefined;
+    if (stat === undefined || !stat.isFile()) {
       res.writeHead(404).end('not found');
+      return;
+    }
+    const etag = `"${stat.size}-${Math.trunc(stat.mtimeMs)}"`;
+    if (res.req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { 'Cache-Control': 'no-cache', ETag: etag }).end();
       return;
     }
     res.writeHead(200, {
       'Content-Type': CONTENT_TYPES[extname(path).toLowerCase()] ?? 'application/octet-stream',
-      'Cache-Control': 'no-store',
+      'Cache-Control': 'no-cache',
+      ETag: etag,
     }).end(readFileSync(path));
   }
 

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Live2D World:真实端口、真实 HTTP 与 SSE,只有 WebSocket 之外的浏览器端是假的。
  * 模型与播放器库用临时目录里的替身文件——这里验的是路由、推流与驱动,不是 Cubism 渲染。
  */
@@ -106,6 +106,19 @@ describe('静态路由', () => {
     expect(await (await fetch(url('/lib/js/pixi.min.js'))).text()).toContain('pixi.min.js');
     expect(await (await fetch(url('/model/miku.model3.json'))).json()).toMatchObject({ version: 3 });
     expect(await (await fetch(url('/app.js'))).text()).toContain('EventSource');
+  });
+
+  it('静态文件带 ETag:未改动回 304,ETag 不匹配照发全文', async () => {
+    await start();
+    const first = await fetch(url('/app.js'));
+    expect(first.status).toBe(200);
+    const etag = first.headers.get('etag');
+    expect(etag).toBeTruthy();
+    const same = await fetch(url('/app.js'), { headers: { 'if-none-match': etag! } });
+    expect(same.status).toBe(304);
+    const other = await fetch(url('/app.js'), { headers: { 'if-none-match': '"stale"' } });
+    expect(other.status).toBe(200);
+    expect(await other.text()).toContain('EventSource');
   });
 
   it('通道表按包给出,页面据此把通道映到模型参数', async () => {
