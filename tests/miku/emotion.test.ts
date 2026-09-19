@@ -9,6 +9,7 @@ import {
   decayEmotion,
   emotionBlock,
   initialEmotion,
+  missEffect,
   moodOf,
 } from '../../bots/miku/persona/emotion.ts';
 
@@ -107,5 +108,39 @@ describe('emotionBlock', () => {
     const block = emotionBlock(initialEmotion());
     expect(block).toContain('心情');
     expect(block).not.toMatch(/\d+\.\d+/);
+  });
+});
+
+describe('missEffect', () => {
+  it('宽限内的缺席不算', () => {
+    const state = initialEmotion();
+    state.updatedAt = Date.now() - 5 * 3_600_000;
+    expect(missEffect(state, Date.now())).toEqual([]);
+  });
+
+  it('寂寞随缺席向上累积,且有上限', () => {
+    const state = initialEmotion();
+    state.updatedAt = Date.now() - 48 * 3_600_000;
+    const before = state.values.loneliness;
+    const reasons = missEffect(state, Date.now());
+    expect(state.values.loneliness).toBeGreaterThan(before);
+    expect(reasons.join('')).toContain('想念累积');
+
+    const long = initialEmotion();
+    long.updatedAt = Date.now() - 30 * 24 * 3_600_000;
+    missEffect(long, Date.now());
+    // 基线 0.2 + 想念上限 0.5,只逼近不越过。
+    expect(long.values.loneliness).toBeLessThanOrEqual(0.7 + 1e-9);
+  });
+
+  it('离开约四天后心情翻成寂寞', () => {
+    const state = initialEmotion();
+    state.updatedAt = Date.now() - 96 * 3_600_000;
+    missEffect(state, Date.now());
+    expect(state.mood).toBe('寂寞');
+  });
+
+  it('重逢的话会安抚寂寞', () => {
+    expect(analyzeAffect('我回来啦,好想你').deltas.loneliness ?? 0).toBeLessThan(0);
   });
 });

@@ -9,15 +9,16 @@ import { readdirSync } from 'node:fs';
 import type { PromptVarDecl } from 'cortico/core/types.ts';
 import { nowIso } from 'cortico/core/util.ts';
 import type { GitWorkspaceMemory } from '../../cormini/persona/memory.ts';
-import type { MemoTiers } from './memoTiers.ts';
+import { ageNote, type MemoTiers } from './memoTiers.ts';
 import { buildRoster } from './roster.ts';
 
 /** 控制台展示的模板变量说明。 */
 export const MEMORY_VAR_DECLS: readonly PromptVarDecl[] = [
   { name: 'memory.tree', description: '工作区最外层条目;目录带 /。', multiline: true },
   { name: 'memory.roster', description: '人物名册:每行「文件名的称呼 — 档案第一行」。', multiline: true },
-  { name: 'memory.memoResident', description: '常驻 memo 的全文,含 ── memo/x ── 分隔行。', multiline: true },
-  { name: 'memory.memoActive', description: 'memo/active/ 里的文件名(只列名不列正文)。' },
+  { name: 'memory.memoResident', description: '常驻 memo 的全文,每条抬头带它多少天没动。', multiline: true },
+  { name: 'memory.memoActive', description: 'memo/active/ 里的文件名,各带多少天没动。' },
+  { name: 'memory.memoStale', description: '超过所在层半衰期的条目;翻新还是沉下去由她判断。' },
   { name: 'memory.memoArchivedCount', description: 'memo/archived/ 里的归档条数。' },
   { name: 'memory.emergences', description: '最近几场梦的浮现,每行一条。', multiline: true },
   { name: 'memory.now', description: '前缀组装那一刻的时间。**在两次前缀重建之间是冻结的**。' },
@@ -40,11 +41,16 @@ export function memoryVars(
   /** 最近几场梦的浮现(MEMORY 3)。 */
   emergences: readonly string[],
 ): Record<string, string> {
+  const now = ctx.now.getTime();
   return {
     'memory.tree': workspaceMap(ws),
     'memory.roster': buildRoster(ws.memoryDir),
-    'memory.memoResident': memo.residentBodies(),
-    'memory.memoActive': memo.activeFiles().map((name) => `「${name}」`).join('、'),
+    'memory.memoResident': memo.residentBodies(now),
+    'memory.memoActive': memo.activeAges(now).map(({ name, ageDays }) => `「${name}」(${ageNote(ageDays)})`).join('、'),
+    'memory.memoStale': memo
+      .stale(now)
+      .map(({ tier, name, ageDays }) => `「${name}」(${ageNote(ageDays)},${tier === 'resident' ? '常驻' : 'active'})`)
+      .join('、'),
     'memory.memoArchivedCount': String(memo.archivedCount()),
     'memory.emergences': emergences.map((text) => `- ${text}`).join('\n'),
     'memory.now': nowIso(ctx.timezone, ctx.now),

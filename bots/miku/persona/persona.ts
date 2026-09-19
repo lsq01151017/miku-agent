@@ -30,6 +30,7 @@ import {
   emotionBlock,
   emotionSnapshot,
   initialEmotion,
+  missEffect,
   type EmotionState,
   type Mood,
   type Values,
@@ -337,6 +338,8 @@ export class Miku extends Cormini {
     if (!policy.enabled) return;
 
     const reasons = decayEmotion(this.state, Date.now(), policy.decayScale);
+    // 先回落,再算久别:缺席让寂寞向上累积,是这条性格里唯一不回落的维度。
+    reasons.push(...missEffect(this.state, Date.now()));
     const { deltas, reasons: affectReasons } = analyzeAffect(spoken.join('\n'));
     applyDeltas(this.state, deltas, reasons, policy.maxStepPerTurn);
     this.state.turns += 1;

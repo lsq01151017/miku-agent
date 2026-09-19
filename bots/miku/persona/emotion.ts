@@ -78,6 +78,8 @@ export const AFFECT_LEXICON: Record<string, Partial<Values>> = {
   机器: { valence: -0.2, loneliness: 0.1 },
   程序: { valence: -0.15, loneliness: 0.1 },
   假的: { valence: -0.25, loneliness: 0.15 },
+  回来: { valence: 0.2, loneliness: -0.15, bond: 0.05 },
+  想你: { valence: 0.25, bond: 0.1, shyness: 0.15, loneliness: -0.1 },
 };
 
 const NEGATIONS = ['不', '没', '别', '无', '非'];
@@ -147,6 +149,27 @@ export function decayEmotion(state: EmotionState, now: number, scale = 1): strin
     }
   }
   return reasons;
+}
+
+/**
+ * 久别:寂寞不随缺席回落,反而向上累积。距上次有人对她说话超过宽限后,以 24 小时半衰期
+ * 逼近想念上限;其余维度不动。可验证的事实是"多久没人说话";寂寞怎么长是性格的机械规则,
+ * 理由照实报。与回落同一个指数族。
+ */
+const MISS_GRACE_HOURS = 8;
+const MISS_CEILING = 0.5;
+const MISS_HALF_LIFE_HOURS = 24;
+
+export function missEffect(state: EmotionState, now: number): string[] {
+  const hours = Math.max(0, (now - state.updatedAt) / 3_600_000);
+  if (hours <= MISS_GRACE_HOURS) return [];
+  const rise = MISS_CEILING * (1 - 2 ** (-(hours - MISS_GRACE_HOURS) / MISS_HALF_LIFE_HOURS));
+  const before = state.values.loneliness;
+  const after = Math.min(1, before + rise);
+  if (after - before < 1e-4) return [];
+  state.values.loneliness = after;
+  state.mood = moodOf(state.values);
+  return [`${Math.round(hours)} 小时没人说话,寂寞 ${before.toFixed(2)}→${after.toFixed(2)}(想念累积)`];
 }
 
 /**

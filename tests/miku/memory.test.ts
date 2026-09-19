@@ -2,13 +2,13 @@
  * Lv2 记忆的机械规则:写权限矩阵、memo 容量门、人物名册。
  * 真实工作区(临时目录里的真文件),不碰模型。
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GitWorkspaceMemory } from '../../bots/cormini/persona/memory.ts';
 import { forgetTool } from '../../bots/miku/persona/forget.ts';
-import { MemoTiers } from '../../bots/miku/persona/memoTiers.ts';
+import { ageNote, MemoTiers } from '../../bots/miku/persona/memoTiers.ts';
 import { memoCapGuard } from '../../bots/miku/persona/memoryTools.ts';
 import { asPersonaRole, checkAccess, zoneOf } from '../../bots/miku/persona/permissions.ts';
 import { buildRoster } from '../../bots/miku/persona/roster.ts';
@@ -145,9 +145,53 @@ describe('memo 容量门', () => {
     ws.writeFileAtomic('memo/active/A.md', 'a\n');
     ws.writeFileAtomic('memo/archived/旧.md', 'old\n');
     const memo = memoWith(2, 5);
-    expect(memo.residentBodies()).toContain('── memo/备忘0.md ──');
+    expect(memo.residentBodies(Date.now())).toContain('── memo/备忘0.md ──');
     expect(memo.activeFiles()).toEqual(['A.md']);
     expect(memo.archivedCount()).toBe(1);
+  });
+});
+
+describe('记忆的年纪与沉寂', () => {
+  const DAY = 86_400_000;
+
+  /** 把文件的 mtime 摆到 now - days 天前。 */
+  const backdate = (rel: string, now: number, days: number): void => {
+    const at = new Date(now - days * DAY);
+    utimesSync(join(dir, rel), at, at);
+  };
+
+  it('条目带年纪,重写会刷新它', () => {
+    const now = Date.now();
+    ws.writeFileAtomic('memo/日程.md', 'x\n');
+    backdate('memo/日程.md', now, 3);
+    ws.writeFileAtomic('memo/active/线索.md', 'y\n');
+    const memo = memoWith(7, 21);
+    expect(memo.residentAges(now).map((x) => x.name)).toEqual(['日程.md']);
+    expect(memo.residentAges(now)[0]!.ageDays).toBeCloseTo(3, 5);
+    expect(memo.activeAges(now)[0]!.ageDays).toBeLessThan(1);
+  });
+
+  it('超过所在层半衰期才算沉寂;常驻比 active 忘得慢', () => {
+    const now = Date.now();
+    ws.writeFileAtomic('memo/重要的.md', 'x\n');
+    backdate('memo/重要的.md', now, 40);
+    ws.writeFileAtomic('memo/active/旧的.md', 'y\n');
+    backdate(join('memo', 'active', '旧的.md'), now, 40);
+    const stale = memoWith(7, 21).stale(now);
+    // 40 天:active(半衰期 30)已沉寂,常驻(半衰期 90)还不算。
+    expect(stale.map((x) => x.name)).toEqual(['旧的.md']);
+    expect(stale[0]!.tier).toBe('active');
+  });
+
+  it('常驻全文的抬头带年纪注记', () => {
+    const now = Date.now();
+    ws.writeFileAtomic('memo/新写的.md', '内容\n');
+    expect(memoWith(7, 21).residentBodies(now)).toContain('── memo/新写的.md ──(今天动过)');
+  });
+
+  it('年纪注记:不足一天是今天,否则取整天数', () => {
+    expect(ageNote(0.2)).toBe('今天动过');
+    expect(ageNote(2.6)).toBe('3天没动');
   });
 });
 
