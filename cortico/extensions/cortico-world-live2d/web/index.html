@@ -6,15 +6,31 @@
 <title>初音未来 · Live2D</title>
 <style>
   :root {
-    /* 磨砂玻璃:半透明底 + 背景模糊 + 一道细边。面板、字幕、输入区、按键都用这一套。 */
-    --glass-bg: rgba(22, 32, 38, 0.42);
-    --glass-bg-strong: rgba(22, 32, 38, 0.58);
-    --glass-edge: rgba(255, 255, 255, 0.14);
-    --glass-ink: #e6fbf6;
-    --glass-dim: #a8c2c9;
-    --glass-accent: #39c5bb;
+    /* 浅色发调:背景取自《モニタリング》Remix 封面发色采样(淡青/淡蓝/淡蓝紫),
+       面板是白玻璃 + 2px 墨线 + 硬投影的流行插画语言。颜色按角色锁死:
+       青 = 交互与她的数据,钢蓝 = 标签,黄 = LIVE 徽标;墨字墨线。 */
+    --pop-ink: #0a0e1a;
+    --pop-dim: #4a5a74;
+    --pop-steel: #4a6fa5;
+    --pop-cyan: #0fb0bf;
+    --pop-cyan-soft: #e2f5f6;
+    --pop-yellow: #fafe03;
+    --pop-panel: rgba(253, 254, 255, 0.9);
+    --pop-edge: #0a0e1a;
+    --pop-hard: 4px 4px 0 rgba(10, 14, 26, 0.85);
   }
-  html, body { margin: 0; height: 100%; background: #10161a; overflow: hidden; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    font: 14px/1.6 system-ui, "Microsoft YaHei", sans-serif; color: var(--pop-ink);
+    /* 舞台:她站的位置留一团白光,底子是发色的淡青到淡蓝;网点铺在背景层,在她身后,不压在她身上。 */
+    background-image:
+      radial-gradient(rgba(10, 14, 26, 0.05) 1px, transparent 1px),
+      radial-gradient(640px 800px at 34% 62%, rgba(255, 255, 255, 0.85), transparent 62%),
+      radial-gradient(520px 420px at 80% 22%, rgba(198, 215, 241, 0.55), transparent 65%),
+      linear-gradient(168deg, #cdebea 0%, #dfe6f0 52%, #c6d7f1 100%);
+    background-size: 9px 9px, 100% 100%, 100% 100%, 100% 100%;
+    background-repeat: repeat, no-repeat, no-repeat, no-repeat;
+  }
   /* 指针落在这层透明覆层上,画布自己不接指针:浏览器手里没有能拖的东西,拖动就不会拖出一份跟着鼠标的副本。 */
   canvas { display: block; -webkit-user-drag: none; user-select: none; touch-action: none; }
   #hit {
@@ -28,27 +44,42 @@
   #conn, #talk, #why, #bottom, #panel { z-index: 3; }
 
   .glass {
-    background: var(--glass-bg);
-    border: 1px solid var(--glass-edge);
-    -webkit-backdrop-filter: blur(14px) saturate(140%);
-    backdrop-filter: blur(14px) saturate(140%);
-    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+    background: var(--pop-panel);
+    border: 2px solid var(--pop-edge);
+    border-radius: 10px;
+    -webkit-backdrop-filter: blur(10px) saturate(120%);
+    backdrop-filter: blur(10px) saturate(120%);
+    box-shadow: var(--pop-hard);
   }
 
   #conn {
-    position: fixed; left: 12px; top: 12px; padding: 4px 10px; border-radius: 999px;
-    font: 12px/1.6 system-ui, sans-serif; color: var(--glass-ink);
+    position: fixed; left: 12px; top: 12px; padding: 4px 12px; border-radius: 999px;
+    font: 600 12px/1.6 system-ui, "Microsoft YaHei", sans-serif; color: var(--pop-ink);
   }
-  #conn.on { color: #8ff0dc; }
+  /* 连上后挂 LIVE 徽标:徽标是伪元素,不占 DOM,JS 只管文本与开关。 */
+  #conn.on { background: var(--pop-cyan-soft); border-color: var(--pop-cyan); }
+  #conn.on::before {
+    content: "LIVE";
+    display: inline-block; margin-right: 8px; padding: 0 7px;
+    background: var(--pop-yellow); border-radius: 6px;
+    font: 700 10px/1.6 ui-monospace, monospace; letter-spacing: .14em;
+    animation: live-blink 1.6s ease-in-out infinite;
+  }
+  @keyframes live-blink { 50% { opacity: .55; } }
   #why {
     position: fixed; left: 12px; bottom: 132px; right: 320px; padding: 8px 12px; border-radius: 10px;
-    font: 12px/1.7 ui-monospace, monospace; color: #ffd9d9; display: none; white-space: pre-wrap;
+    font: 12px/1.7 ui-monospace, monospace; color: #8a1f1a; display: none; white-space: pre-wrap;
+    background: #fdecec; border: 2px solid var(--pop-edge);
+    box-shadow: 3px 3px 0 rgba(10, 14, 26, 0.85);
   }
   #talk {
     position: fixed; left: 12px; top: 46px; padding: 5px 10px; border-radius: 10px;
-    font: 12px/1.7 system-ui, sans-serif; color: var(--glass-dim); max-width: 46vw;
+    font: 12px/1.7 system-ui, "Microsoft YaHei", sans-serif; color: var(--pop-dim); max-width: 46vw;
   }
-  #talk a { color: var(--glass-accent); }
+  #talk a {
+    color: var(--pop-steel); font-weight: 600; text-decoration: underline;
+    text-decoration-color: rgba(74, 111, 165, 0.45); text-underline-offset: 3px;
+  }
 
   /* 她的话和我发的话同住底部一栏:字幕在上、输入区在下,顺序固定,字号不变,行间压到最小。 */
   #bottom {
@@ -58,11 +89,10 @@
   }
   #subtitle {
     position: relative;
-    width: min(1140px, calc(100vw - 28px)); padding: 0 14px; border-radius: 6px;
-    border: 0; background: rgba(10, 16, 20, 0.34);
-    -webkit-backdrop-filter: blur(8px);
-    backdrop-filter: blur(8px);
-    color: var(--glass-ink); font: 15px/1 system-ui, sans-serif;
+    width: min(1140px, calc(100vw - 28px)); padding: 8px 16px; border-radius: 10px;
+    border: 2px solid var(--pop-edge); background: #fdfeff;
+    box-shadow: 3px 3px 0 rgba(10, 14, 26, 0.85);
+    color: var(--pop-ink); font: 500 15px/1.5 system-ui, "Microsoft YaHei", sans-serif;
     text-align: center; white-space: pre-wrap; word-break: break-word;
     opacity: 0; transition: opacity .18s ease;
     pointer-events: none;
@@ -72,67 +102,80 @@
   /* 底部输入区:扁平的;只留最近一句,其余收起,要用时展开。 */
   #composer {
     position: relative; pointer-events: auto;
-    width: min(1080px, calc(100vw - 40px)); padding: 7px 10px; border-radius: 14px;
-    color: var(--glass-ink); font: 14px/1.5 system-ui, sans-serif;
+    width: min(1080px, calc(100vw - 40px)); padding: 7px 10px;
+    color: var(--pop-ink); font: 14px/1.5 system-ui, "Microsoft YaHei", sans-serif;
   }
   #composer.hidden { display: none; }
   #mine {
     display: flex; flex-direction: column; gap: 2px; padding: 0 4px;
-    font-size: 12px; color: var(--glass-dim); overflow: hidden; max-height: 19px;
+    font-size: 12px; color: var(--pop-dim); overflow: hidden; max-height: 19px;
   }
   #composer.expanded #mine { max-height: 30vh; overflow-y: auto; padding-bottom: 6px; }
   #mine div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #composer:not(.expanded) #mine div:not(:last-child) { display: none; }
   #composer form { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
   #composer input {
-    flex: 1; min-width: 0; padding: 8px 12px; border-radius: 10px;
-    border: 1px solid var(--glass-edge); background: rgba(255, 255, 255, 0.06);
-    color: var(--glass-ink); font: 14px/1.4 system-ui, sans-serif;
+    flex: 1; min-width: 0; padding: 8px 12px; border-radius: 8px;
+    border: 2px solid var(--pop-edge); background: #ffffff;
+    color: var(--pop-ink); font: 14px/1.4 system-ui, "Microsoft YaHei", sans-serif;
   }
-  #composer input::placeholder { color: #8ea6ad; }
-  #composer input:focus { outline: none; border-color: var(--glass-accent); }
-  #btn-history { padding: 4px 10px; border-radius: 8px; font-size: 11px; color: var(--glass-dim); }
+  #composer input::placeholder { color: #6b7288; }
+  #composer input:focus {
+    outline: none; background: var(--pop-cyan-soft);
+    box-shadow: 3px 3px 0 rgba(15, 176, 191, 0.55);
+  }
+  /* 「历史」是文字按钮:下划线式,不占一块牌子。 */
+  #btn-history {
+    padding: 4px 8px; border: 0; border-bottom: 2px solid rgba(10, 14, 26, 0.35); border-radius: 0;
+    background: transparent; box-shadow: none; color: var(--pop-dim); font-size: 11px; font-weight: 600;
+  }
+  #btn-history:hover { background: transparent; color: var(--pop-steel); border-bottom-color: var(--pop-steel); }
   #panel .more {
-    width: 100%; margin-top: 8px; padding: 4px 8px; font-size: 11px;
-    color: var(--glass-dim); background: rgba(255, 255, 255, 0.04);
+    width: 100%; margin-top: 8px; padding: 4px 8px; font-size: 11px; font-weight: 600;
+    color: var(--pop-dim); background: #ffffff;
   }
   #panel-more.collapsed { display: none; }
   button {
-    padding: 8px 16px; border-radius: 10px; cursor: pointer;
-    border: 1px solid var(--glass-edge); background: var(--glass-bg-strong); color: var(--glass-ink);
-    -webkit-backdrop-filter: blur(14px) saturate(140%);
-    backdrop-filter: blur(14px) saturate(140%);
-    font: 14px/1.4 system-ui, sans-serif;
+    padding: 8px 16px; border-radius: 8px; cursor: pointer;
+    border: 2px solid var(--pop-edge); background: #ffffff; color: var(--pop-ink);
+    font: 600 14px/1.4 system-ui, "Microsoft YaHei", sans-serif;
+    box-shadow: 3px 3px 0 rgba(10, 14, 26, 0.85);
+    transition: transform .08s ease, box-shadow .08s ease, background .15s ease;
   }
-  button:hover { background: rgba(57, 197, 187, 0.22); border-color: var(--glass-accent); }
-  button:active { transform: translateY(1px); }
+  button:hover { background: var(--pop-cyan); }
+  /* 按压是把投影按回去:牌子落进纸面。 */
+  button:active { transform: translate(3px, 3px); box-shadow: 0 0 0 rgba(10, 14, 26, 0.85); }
 
-  /* 右侧数值面板:同一套玻璃。 */
+  /* 右侧数值面板:同一套白玻璃。 */
   #panel {
     position: fixed; right: 12px; top: 12px; width: 288px; max-height: calc(100% - 120px);
-    overflow-y: auto; padding: 10px 12px 12px; border-radius: 14px;
-    color: var(--glass-ink); font: 12px/1.6 system-ui, sans-serif;
+    overflow-y: auto; padding: 10px 12px 12px;
+    color: var(--pop-ink); font: 12px/1.6 system-ui, "Microsoft YaHei", sans-serif;
   }
   #panel h2 {
-    margin: 0 0 6px; font-size: 12px; font-weight: 600; color: var(--glass-accent);
-    display: flex; justify-content: space-between; align-items: baseline;
+    margin: 0 0 6px; font-size: 13px; font-weight: 800; color: var(--pop-ink);
+    display: flex; justify-content: space-between; align-items: center;
   }
-  #panel h2 span { color: var(--glass-dim); font-weight: 400; }
+  /* 心情值做成小圆牌:数据来了是「元气」,没来是「—」,同一块牌。 */
+  #panel h2 span {
+    padding: 0 8px; background: var(--pop-cyan); border: 2px solid var(--pop-edge); border-radius: 999px;
+    font: 700 11px/1.6 system-ui, "Microsoft YaHei", sans-serif; color: var(--pop-ink);
+  }
   #panel section { margin-top: 10px; }
-  #panel .muted { color: var(--glass-dim); }
+  #panel .muted { color: var(--pop-dim); }
   .row { display: grid; grid-template-columns: 62px 1fr 44px; gap: 6px; align-items: center; }
-  .row .bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.10); overflow: hidden; }
-  .row .bar > i { display: block; height: 100%; background: var(--glass-accent); width: 0; }
-  .row .num, .ctl .num { text-align: right; font: 11px/1.6 ui-monospace, monospace; color: var(--glass-dim); }
+  .row .bar { height: 10px; border: 2px solid var(--pop-edge); background: #ffffff; overflow: hidden; }
+  .row .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #0fa3b1, #14b8c6); width: 0; }
+  .row .num, .ctl .num { text-align: right; font: 700 11px/1.6 ui-monospace, monospace; color: var(--pop-ink); }
   .kv { display: flex; justify-content: space-between; gap: 8px; }
-  .kv b { font-weight: 600; color: #dff6f2; }
+  .kv b { font-weight: 700; color: var(--pop-ink); font-family: ui-monospace, monospace; font-size: 11px; }
   .ctl { margin-top: 8px; }
   .ctl label { display: grid; grid-template-columns: 46px 1fr 52px; gap: 6px; align-items: center; margin-top: 4px; }
-  .ctl input[type=range] { width: 100%; accent-color: var(--glass-accent); }
+  .ctl input[type=range] { width: 100%; accent-color: var(--pop-cyan); }
   .btns { display: flex; gap: 6px; margin-top: 8px; }
   .btns button { flex: 1; padding: 5px 8px; font-size: 12px; }
-  .btns button.on { background: rgba(57, 197, 187, 0.30); border-color: var(--glass-accent); color: #dff6f2; }
-  #channels { font: 11px/1.5 ui-monospace, monospace; color: var(--glass-dim); }
+  .btns button.on { background: var(--pop-cyan); }
+  #channels { font: 700 11px/1.5 ui-monospace, monospace; color: var(--pop-dim); }
   #channels div { display: flex; justify-content: space-between; }
 </style>
 </head>

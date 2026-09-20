@@ -862,12 +862,13 @@
     var source = new EventSource('/state');
     source.onopen = function () {
       if (!el.conn) return;
-      el.conn.className = 'on';
+      // 徽章保持玻璃底:连上挂 LIVE(伪元素徽标跟着 .on 走),断开只换文本。
+      el.conn.className = 'glass on';
       el.conn.textContent = '已连上她的形象';
     };
     source.onerror = function () {
       if (!el.conn) return;
-      el.conn.className = '';
+      el.conn.className = 'glass';
       el.conn.textContent = '断开,重连中…';
     };
     source.onmessage = function (event) {
