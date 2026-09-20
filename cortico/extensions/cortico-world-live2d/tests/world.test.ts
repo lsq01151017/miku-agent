@@ -657,6 +657,14 @@ describe('摸头', () => {
     await pat(false);
   });
 
+  it('素材包点名的头部网格经 /pack/pat.json 给页面', async () => {
+    await start();
+    const pack = await (await fetch(url('/pack/pat.json'))).json() as { headMeshes?: unknown };
+    expect(Array.isArray(pack.headMeshes)).toBe(true);
+    expect((pack.headMeshes as string[]).every((id) => typeof id === 'string' && id !== '')).toBe(true);
+    expect((pack.headMeshes as string[]).length).toBeGreaterThan(0);
+  });
+
   it('坏请求体回 400,不炸服务', async () => {
     await start();
     const res = await fetch(url('/pat'), { method: 'POST', body: 'not json' });

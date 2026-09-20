@@ -18,6 +18,7 @@ interface FakeNode {
   id: string;
   className: string;
   textContent: string;
+  value: string;
   style: Record<string, string>;
   children: FakeNode[];
   handlers: Record<string, Array<(event: Record<string, unknown>) => void>>;
@@ -39,6 +40,8 @@ function stubBrowser(): {
   sockets: Array<{ url: string; sent: string[]; readyState: number; fire: (data: string) => void }>;
   /** 页面发出去的 POST(摸头的心跳)。 */
   posted: Array<{ url: string; body: string }>;
+  /** 摸头识别区的锚点网格范围(画布像素);挪动它即挪动模型的头。 */
+  headBounds: { x: number; y: number; width: number; height: number };
   /** 触发 window 上的事件(页面用它接指针)。 */
   fireWindow: (type: string, event: Record<string, unknown>) => void;
   /** 跑 n 帧:每帧先走页面的 requestAnimationFrame,再走模型的 beforeModelUpdate。 */
@@ -61,7 +64,7 @@ function stubBrowser(): {
 
   const makeNode = (id: string): FakeNode => {
     const node: FakeNode = {
-      id, className: '', textContent: '', style: {}, children: [],
+      id, className: '', textContent: '', value: '', style: {}, children: [],
       handlers: {},
       appendChild(child) { node.children.push(child); return child; },
       removeChild(child) {
@@ -84,6 +87,8 @@ function stubBrowser(): {
     return created;
   };
 
+  // 摸头识别区的锚点网格(ArtMesh207)在画布上的范围;测试挪动它,验证识别区跟着网格走。
+  const headBounds = { x: 20, y: 5, width: 60, height: 30 };
   const model = {
     // PIXI 容器的 width/height 含当前缩放。取景若拿它们算贴合比例,每算一次就再乘一次缩放。
     get width() { return 100 * model.scale.x; },
@@ -93,7 +98,17 @@ function stubBrowser(): {
       set(value: number) { scales.push(value); model.scale.x = value; },
     },
     anchor: { set: () => {} },
-    position: { set: (x: number, y: number) => positions.push({ x, y }) },
+    position: {
+      x: 0,
+      y: 0,
+      set(x: number, y: number) { model.position.x = x; model.position.y = y; positions.push({ x, y }); },
+    },
+    // 画面坐标 → 画布像素,与 applyTransform 做的变换互逆(锚点在画布中心 50,50)。
+    toModelPosition(point: { x: number; y: number }, out: { x: number; y: number }) {
+      out.x = (point.x - model.position.x) / model.scale.x + 50;
+      out.y = (point.y - model.position.y) / model.scale.x + 50;
+      return out;
+    },
     internalModel: {
       settings: {
         groups: [{ Target: 'Parameter', Name: 'EyeBlink', Ids: ['ParamEyeLOpen'] }],
@@ -103,6 +118,7 @@ function stubBrowser(): {
         addParameterValueById: (param: string, value: number) => written.push({ param, value, added: true }),
         getParameterValueById: () => blink,
       },
+      getDrawableBounds: (id: string) => (id === 'ArtMesh207' ? { ...headBounds } : null),
       on: (event: string, handler: () => void) => {
         if (event === 'beforeModelUpdate') beforeModelUpdate = handler;
       },
@@ -169,6 +185,7 @@ function stubBrowser(): {
         const target = String(url);
         if (target.includes('overrides')) return { Param137: 1 };
         if (target.includes('chat.json')) return { enabled: true, agent: false };
+        if (target.includes('pat.json')) return { headMeshes: ['ArtMesh207'] };
         return {
           FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
           MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
@@ -188,7 +205,7 @@ function stubBrowser(): {
   globals.EventSource = FakeEventSource;
 
   return {
-    written, scales, positions, nodes, stored, instances, sockets, posted,
+    written, scales, positions, nodes, stored, instances, sockets, posted, headBounds,
     fireWindow: (type: string, event: Record<string, unknown>) => {
       for (const fn of windowHandlers[type] ?? []) fn(event);
     },
@@ -339,8 +356,15 @@ describe('播放器页面', () => {
     // ── 摸头:不开「拖动」,左键按在头上就是摸 ─────────────────────────────
     stubs.posted.length = 0;
     stubs.written.length = 0;
-    const headY = 450 - 100 * fit * 0.43;
-    node('hit').fire('pointerdown', { clientX: 800, clientY: headY, button: 0, pointerId: 2 });
+    // 识别区跟着锚点网格与取景走,屏幕点一律从画布坐标推出来:画布 → 画面 = *fit,再平移到画布中心所在的屏幕点。
+    const headAt = (canvasX: number, canvasY: number): Record<string, number> => ({
+      clientX: 800 + (canvasX - 50) * fit,
+      clientY: 450 + (canvasY - 50) * fit,
+    });
+    // 锚点网格(ArtMesh207)的范围是 (20,5)-(80,35):头顶一圈的椭圆中心在网格上沿往下 0.29 网格高。
+    const headCx = 20 + 60 * 0.53;
+    const headCy = 5 + 30 * 0.29;
+    node('hit').fire('pointerdown', { ...headAt(headCx, headCy), button: 0, pointerId: 2 });
     expect(stubs.posted).toEqual([{ url: '/pat', body: '{"active":true}' }]);
     // 摸头时头跟着手大幅转:指针推到最右,头的角度远超平时的 6 度。
     stubs.fireWindow('pointermove', { clientX: 1600, clientY: 450 });
@@ -354,11 +378,31 @@ describe('播放器页面', () => {
     stubs.pump(8);
     const headAfter = stubs.written.filter((entry) => entry.param === 'ParamAngleX').pop()!;
     expect(headAfter.value).toBeLessThanOrEqual(6);
-    // 打在身上不算摸头:肩上的位置不触发。
+    // 打在身上不算摸头:肩上的位置(画布 50,70)不触发。
     stubs.posted.length = 0;
-    node('hit').fire('pointerdown', { clientX: 800, clientY: 450, button: 0, pointerId: 3 });
+    node('hit').fire('pointerdown', { ...headAt(50, 70), button: 0, pointerId: 3 });
     expect(stubs.posted).toEqual([]);
     node('hit').fire('pointerup', { pointerId: 3 });
+    // 头动了(转头/晃动),识别区跟着网格走:原来的点摸空,头此刻的位置才触发。
+    stubs.headBounds.x += 40;
+    node('hit').fire('pointerdown', { ...headAt(headCx, headCy), button: 0, pointerId: 4 });
+    expect(stubs.posted).toEqual([]);
+    node('hit').fire('pointerup', { pointerId: 4 });
+    node('hit').fire('pointerdown', { ...headAt(headCx + 40, headCy), button: 0, pointerId: 4 });
+    expect(stubs.posted).toEqual([{ url: '/pat', body: '{"active":true}' }]);
+    node('hit').fire('pointerup', { pointerId: 4 });
+    stubs.headBounds.x -= 40;
+    // 取景变了,识别区跟着画面走:拖走后原屏幕点摸空,头此刻所在的屏幕位置才触发。
+    stubs.posted.length = 0;
+    node('offset-x').value = '300';
+    node('offset-x').fire('input');
+    node('hit').fire('pointerdown', { ...headAt(headCx, headCy), button: 0, pointerId: 5 });
+    expect(stubs.posted).toEqual([]);
+    node('hit').fire('pointerup', { pointerId: 5 });
+    node('hit').fire('pointerdown', { ...headAt(headCx + 300 / fit, headCy), button: 0, pointerId: 5 });
+    expect(stubs.posted).toEqual([{ url: '/pat', body: '{"active":true}' }]);
+    node('hit').fire('pointerup', { pointerId: 5 });
+    node('btn-reset').fire('click');
 
     // ── 眼神跟随:只眼睛和一点头,身体一律不碰 ─────────────────────────────
     stubs.written.length = 0;

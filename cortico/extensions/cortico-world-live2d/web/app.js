@@ -31,6 +31,15 @@
   var PAT_REFRESH_MS = 2000;
   /** 摸头时头跟着手转的幅度(度);平时只跟一点。 */
   var PAT_HEAD_DEG = 22;
+  /**
+   * 摸头识别区的椭圆:中心与半轴,写成锚点网格范围的分位(画布坐标 Y 向下,从网格上沿量起)。
+   * 按真实模型标定:中心在网格上沿往下 0.29 网格高,半轴 0.36 网格宽 / 0.42 网格高——
+   * 盖住头顶与额头,下缘落在脸颊上沿附近,不盖嘴与身上。
+   */
+  var PAT_REGION_CX = 0.53;
+  var PAT_REGION_CY = 0.29;
+  var PAT_REGION_RX = 0.36;
+  var PAT_REGION_RY = 0.42;
 
   /** 底部输入区留多少条历史(收起时只看得到最近一句);字幕在她说完之后留一会儿再淡掉。 */
   var MINE_LINES = 50;
@@ -114,6 +123,8 @@
   // 摸头:左键按在头上(不开「拖动」)就是摸,不是拖。
   var patting = false;
   var patTimer = null;
+  // 摸头识别区锚定的头部网格(ArtMesh id),来自素材包的 /pack/pat.json;空 = 不启用摸头。
+  var headMeshes = [];
   /** 只启动一次(见 boot)。 */
   var booted = false;
   // 眼神跟随:目标来自指针位置,当前值指数逼近它。光标停住超过 LOOK_HOLD_MS,
@@ -409,17 +420,36 @@
     // 拖动要先用面板里的「拖动」开关打开;没开时,左键按在头上是摸头。
     var dragSurface = el.hit || el.canvas;
 
-    /** 她的头在画面上的区域:头顶一圈(按模型此刻的尺寸,她放大区域也跟着大)。
-     *  分位按真实模型量过:脸颊在顶部往下 0.16 高度处,头顶再往上约 0.08。 */
+    /**
+     * 她的头在画面上的区域:锚定在素材包点名的头部网格上,按网格**此刻**的顶点量出来。
+     * 点击先换算回画布坐标(toModelPosition 吃下取景与缩放),再对网格范围的头顶一圈做
+     * 椭圆判定。网格跟着头动,识别区就一直在她头上;不按画布中心与固定分位估——画布中心
+     * 不等于内容中心,估出来的区域会整个偏离她实际的头。
+     */
     function headHit(clientX, clientY) {
-      if (!model) return false;
-      var w = model.width, h = model.height; // 含缩放
-      // 模型中心 = 画面中心 + 取景偏移(view.x/y 是偏移,不是坐标)。
-      var cx = window.innerWidth / 2 + view.x;
-      var cy = window.innerHeight / 2 + view.y;
-      var dx = (clientX - cx) / (w * 0.18);
-      var dy = (clientY - (cy - h * 0.43)) / (h * 0.08);
+      if (!model || headMeshes.length === 0) return false;
+      var local = { x: 0, y: 0 };
+      try { model.toModelPosition({ x: clientX, y: clientY }, local); } catch (e) { return false; }
+      var box = headBox();
+      if (!box) return false;
+      var dx = (local.x - (box.x + box.width * PAT_REGION_CX)) / (box.width * PAT_REGION_RX);
+      var dy = (local.y - (box.y + box.height * PAT_REGION_CY)) / (box.height * PAT_REGION_RY);
       return dx * dx + dy * dy <= 1;
+    }
+
+    /** 锚点网格此刻的并集范围(画布像素);一个都取不到就没有识别区。 */
+    function headBox() {
+      var internal = model && model.internalModel;
+      if (!internal || typeof internal.getDrawableBounds !== 'function') return null;
+      var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (var i = 0; i < headMeshes.length; i++) {
+        var b = null;
+        try { b = internal.getDrawableBounds(headMeshes[i]); } catch (e) { b = null; } // 模型没有这个网格
+        if (!b) continue;
+        x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
+        x1 = Math.max(x1, b.x + b.width); y1 = Math.max(y1, b.y + b.height);
+      }
+      return isFinite(x0) ? { x: x0, y: y0, width: x1 - x0, height: y1 - y0 } : null;
     }
 
     function sendPat(active) {
@@ -662,6 +692,13 @@
       why('取 /pack/channels.json 失败:' + e.message);
       return;
     }
+    // 摸头的头部网格拿不到就没有这一层,页面其余照常。
+    try {
+      var patPack = await (await fetch('/pack/pat.json', { cache: 'no-store' })).json();
+      headMeshes = (Array.isArray(patPack.headMeshes) ? patPack.headMeshes : []).filter(function (id) {
+        return typeof id === 'string' && id !== '';
+      });
+    } catch (e) { /* 同上 */ }
 
     app = new PIXI.Application({
       view: el.canvas,

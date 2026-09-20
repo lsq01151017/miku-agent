@@ -385,6 +385,9 @@ export class Live2DWorld implements World {
         unknown: this.pack.unknownStagingChannels,
       });
     }
+    if (this.pack.headMeshes.length === 0) {
+      host.log.warn('素材包没点名摸头的头部网格(pat.json),页面上的摸头不会触发');
+    }
 
     // 起服务之前先把配置查完:路径不对、模型点不清,都在挂载时报出来,不留到有人打开页面。
     this.modelFile = this.modelFileName();
@@ -714,6 +717,9 @@ export class Live2DWorld implements World {
       }
       if (url.pathname === '/pack/overrides.json') {
         return this.sendJson(res, this.paramOverrides);
+      }
+      if (url.pathname === '/pack/pat.json') {
+        return this.sendJson(res, { headMeshes: this.pack?.headMeshes ?? [] });
       }
       if (url.pathname === '/pack/chat.json') {
         // 页面据此决定要不要显示输入区:没有控制台也没有外部 Agent 就是没有这一块。

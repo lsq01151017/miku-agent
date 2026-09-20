@@ -5,6 +5,7 @@
  *   clips.json      片段,三种形状——pulse(关键帧)、sustain(保持值 + 待机噪声)、gaze(视线目标)
  *   vocab.json      中文词 → 片段,带生命周期与强度;aliases 把说法归到同一个词
  *   expressions.json 措辞 → 模型自带表情名的指令表(可选:没有这份文件就是没有这一层)
+ *   pat.json        摸头识别区锚定的头部网格(可选:没有这份文件,页面上的摸头不触发)
  *
  * 通道名是抽象层:包说 `FaceAngleZ`,模型接的是 `ParamAngleZ`。换模型只换映射,不动片段。
  *
@@ -78,6 +79,8 @@ export interface Pack {
   cues: readonly ExpressionCue[];
   /** 表情 → 伴随片段;表情挂上的那一刻播一次。 */
   staging: ExpressionStaging;
+  /** 摸头识别区锚定的头部网格(ArtMesh id);空 = 页面上的摸头不触发。 */
+  headMeshes: readonly string[];
   /** vocab 提到、clips 里没有的片段名。 */
   missingClipIds: readonly string[];
   /** 伴随表提到、clips 里没有的片段名。 */
@@ -123,6 +126,10 @@ export function loadPack(dir: string): Pack {
   const expressionsRaw = readJsonIfPresent(join(dir, 'expressions.json'));
   const cues = parseCues(expressionsRaw);
   const staging = parseStaging(expressionsRaw);
+  const patRaw = readJsonIfPresent(join(dir, 'pat.json')) as { headMeshes?: unknown } | null;
+  const headMeshes = Array.isArray(patRaw?.headMeshes)
+    ? patRaw.headMeshes.filter((id): id is string => typeof id === 'string' && id !== '')
+    : [];
 
   const known = new Set([
     ...Object.keys(clips.pulse ?? {}),
@@ -145,6 +152,7 @@ export function loadPack(dir: string): Pack {
     vocab,
     cues,
     staging,
+    headMeshes,
     missingClipIds,
     missingStagingClipIds,
     unknownStagingChannels,
