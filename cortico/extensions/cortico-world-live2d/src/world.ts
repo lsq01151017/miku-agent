@@ -75,6 +75,13 @@ const TERMINAL_CHAT_PATH = '/ws/providers/world%3Aterminal/panels/chat';
 const AGENT_CHAT_PATH = '/agent/chat';
 /** 摸头的入口:页面按住左键在她头上时打这里,active 带心跳续期。 */
 const PAT_PATH = '/pat';
+/** 对话框四件套(上下文用量/模型/运行开关)的控制台代理入口。 */
+const DIALOG_PROVIDERS_PATH = '/dialog/providers';
+const DIALOG_MODELS_PATH = '/dialog/models';
+const DIALOG_MODEL_PATH = '/dialog/model';
+const DIALOG_RUN_PATH = '/dialog/run';
+/** 控制台状态轮询间隔;页面连着才轮,连上先取一次。 */
+const STATUS_POLL_MS = 2_000;
 /** 页面每两秒续一次摸头;超过这个间隔没续上,World 自己把摸头收掉(页面崩了也不能一直挂着)。 */
 const PAT_STALE_MS = 5_000;
 /** 摸头开始那一刻把事件递进对话;连着摸按这个冷却合并成一次,免得每一下都唤醒一轮。 */
@@ -173,6 +180,14 @@ export class Live2DWorld implements World {
   /** 对话框的 WebSocket 服务;没配 `consoleUrl` 时为 null。 */
   private chatServer: WebSocketServer | null = null;
   private pushTimer: NodeJS.Timeout | null = null;
+  /** 控制台状态轮询;没配 `consoleUrl` 时不起。 */
+  private statusTimer: NodeJS.Timeout | null = null;
+  /** 一次轮询进行中时跳过这一拍,不叠请求。 */
+  private statusInFlight = false;
+  /** 上次轮询是否失败;只在对失败沿报一次,不每两秒刷一行日志。 */
+  private statusFailing = false;
+  /** 对话框要的状态快照(上下文用量/运行与否);没取到过就是 null。 */
+  private dialogStatus: Record<string, unknown> | null = null;
   private readonly clients = new Set<ServerResponse>();
   private boundPort = 0;
   /** 挂载前收到的内部状态:先记着,起服务时补上。 */
@@ -483,7 +498,10 @@ export class Live2DWorld implements World {
 
     this.server = createServer((req, res) => this.handle(req, res));
     this.boundPort = await this.listen(this.cfg.port);
-    if (this.cfg.consoleUrl !== '') this.attachChat(this.server);
+    if (this.cfg.consoleUrl !== '') {
+      this.attachChat(this.server);
+      this.statusTimer = setInterval(() => void this.pollStatus(), STATUS_POLL_MS);
+    }
     this.pushTimer = setInterval(() => this.pushFrame(), PUSH_INTERVAL_MS);
     host.log.info(`形象页已启动 ${this.url()}`);
   }
@@ -534,6 +552,216 @@ export class Live2DWorld implements World {
         client.on('close', () => { try { upstream.close(); } catch { /* 同上 */ } });
       });
     });
+  }
+
+  // ── 对话框的控制台代理 ──────────────────────────────────────────────────────
+
+  /**
+   * 对话框四件套的数据都在控制台那边:上下文用量在 `/api/status`,模型在语言模型页的
+   * `settings` 面板,运行开关在 `/api/run/*`。页面只连本 World,所以由这里转一手——
+   * 与 `/chat` 同一条原则:页面只有一个来源,不必知道控制台在哪个端口。
+   */
+  private consoleBase(): string | null {
+    const base = this.cfg.consoleUrl.trim().replace(/\/+$/, '');
+    return base === '' ? null : base;
+  }
+
+  /** 没配控制台时统一回 409:与 /agent/chat 的"没配"同一个说法。 */
+  private consoleMissing(res: ServerResponse): boolean {
+    if (this.consoleBase() !== null) return false;
+    res.writeHead(409, { 'Content-Type': 'text/plain; charset=utf-8' }).end('没有配 worlds.live2d.consoleUrl');
+    return true;
+  }
+
+  /** 取控制台一个 JSON 端点;非 2xx 把服务端给的 error 带出来,不带就用状态码。 */
+  private async consoleJson(path: string, init?: { method?: string; body?: string }): Promise<unknown> {
+    const base = this.consoleBase();
+    if (base === null) throw new Error('没有配 worlds.live2d.consoleUrl');
+    const response = await fetch(base + path, {
+      ...(init ?? {}),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const body = await response.json() as { error?: unknown };
+        if (typeof body.error === 'string' && body.error !== '') detail = body.error;
+      } catch { /* 非 JSON 的错误体就用状态码 */ }
+      throw new Error(detail);
+    }
+    return response.json();
+  }
+
+  /**
+   * 语言模型页的端点清单:manifest 里 kind 为 llm 的页各取一份 `settings/state`,
+   * 合成一页能用的平表。active 在每一页的 state 里都是同一个值(部署的 activeProvider)。
+   */
+  private async dialogProviders(): Promise<{ active: string; instances: Array<{ name: string; kind: string; model: string; page: string }> }> {
+    const manifest = await this.consoleJson('/api/console/manifest') as { providers?: Array<{ id?: unknown; kind?: unknown }> };
+    const pages = (manifest.providers ?? [])
+      .filter((page): page is { id: string; kind: string } =>
+        typeof page.id === 'string' && page.id !== '' && page.kind === 'llm')
+      .map((page) => page.id);
+    const instances: Array<{ name: string; kind: string; model: string; page: string }> = [];
+    let active = '';
+    for (const page of pages) {
+      const state = await this.consoleJson(
+        `/api/console/providers/${encodeURIComponent(page)}/panels/settings/state`,
+      ) as { active?: unknown; instances?: Array<{ name?: unknown; entry?: { kind?: unknown; spec?: { model?: unknown } } }> };
+      if (typeof state.active === 'string') active = state.active;
+      for (const instance of state.instances ?? []) {
+        if (typeof instance.name !== 'string') continue;
+        instances.push({
+          name: instance.name,
+          kind: typeof instance.entry?.kind === 'string' ? instance.entry.kind : '',
+          model: typeof instance.entry?.spec?.model === 'string' ? instance.entry.spec.model : '',
+          page,
+        });
+      }
+    }
+    return { active, instances };
+  }
+
+  /** 找一个端点实例所在的页;名字不存在时抛一句能读懂的话。 */
+  private async pageOfInstance(name: string): Promise<string> {
+    const { instances } = await this.dialogProviders();
+    const hit = instances.find((instance) => instance.name === name);
+    if (!hit) throw new Error(`没有叫 ${name} 的端点实例`);
+    return hit.page;
+  }
+
+  private async sendDialogProviders(res: ServerResponse): Promise<void> {
+    if (this.consoleMissing(res)) return;
+    try {
+      this.sendJson(res, await this.dialogProviders());
+    } catch (error) {
+      this.sendJson(res, { error: `取端点清单失败:${String(error instanceof Error ? error.message : error)}` });
+    }
+  }
+
+  /** 某个端点实例背后的模型目录(端点自己的 /models);端点不支持时把控制台的话带回来。 */
+  private async sendDialogModels(url: URL, res: ServerResponse): Promise<void> {
+    if (this.consoleMissing(res)) return;
+    const name = url.searchParams.get('name') ?? '';
+    if (name === '') {
+      this.sendJson(res, { error: '缺少 name 参数' });
+      return;
+    }
+    try {
+      const page = await this.pageOfInstance(name);
+      const out = await this.consoleJson(
+        `/api/console/providers/${encodeURIComponent(page)}/panels/settings/models`,
+        { method: 'POST', body: JSON.stringify({ args: [{ name }] }) },
+      ) as { models?: Array<{ id?: unknown }> };
+      this.sendJson(res, {
+        models: (out.models ?? [])
+          .filter((model): model is { id: string } => typeof model.id === 'string')
+          .map((model) => ({ id: model.id })),
+      });
+    } catch (error) {
+      this.sendJson(res, { error: `取模型列表失败:${String(error instanceof Error ? error.message : error)}` });
+    }
+  }
+
+  /**
+   * 换模型:换端点实例,或在实例内换模型名。实例内换名要保住模型档的其余键(推理开关、
+   * 上限),所以先取那份 state 里的 spec,只改 model 再提交;不换名就不带 spec,实例用自己的档。
+   */
+  private async receiveDialogModel(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.consoleMissing(res)) return;
+    let body: { name?: unknown; model?: unknown };
+    try {
+      body = await readJsonBody(req) as { name?: unknown; model?: unknown };
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('请求体不是 JSON');
+      return;
+    }
+    const name = typeof body.name === 'string' ? body.name : '';
+    const model = typeof body.model === 'string' ? body.model : '';
+    if (name === '') {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('缺少 name');
+      return;
+    }
+    try {
+      const page = await this.pageOfInstance(name);
+      let spec: Record<string, unknown> | undefined;
+      if (model !== '') {
+        const state = await this.consoleJson(
+          `/api/console/providers/${encodeURIComponent(page)}/panels/settings/state`,
+        ) as { instances?: Array<{ name?: unknown; entry?: { spec?: unknown } }> };
+        const entry = (state.instances ?? []).find((instance) => instance.name === name)?.entry;
+        const prior = (entry && typeof entry.spec === 'object' && entry.spec !== null && !Array.isArray(entry.spec))
+          ? entry.spec as Record<string, unknown>
+          : {};
+        spec = { ...prior, model };
+      }
+      await this.consoleJson(
+        `/api/console/providers/${encodeURIComponent(page)}/panels/settings/activate`,
+        { method: 'POST', body: JSON.stringify({ args: [{ name, ...(spec ? { spec } : {}) }] }) },
+      );
+      this.sendJson(res, { ok: true });
+    } catch (error) {
+      this.sendJson(res, { error: `换模型失败:${String(error instanceof Error ? error.message : error)}` });
+    }
+  }
+
+  /** 运行开关:暂停/继续是"她许不许动"的总闸,转控制台的 /api/run/*。 */
+  private async receiveDialogRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.consoleMissing(res)) return;
+    let body: { action?: unknown };
+    try {
+      body = await readJsonBody(req) as { action?: unknown };
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('请求体不是 JSON');
+      return;
+    }
+    const action = body.action === 'pause' || body.action === 'resume' ? body.action : '';
+    if (action === '') {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('action 只认 pause 或 resume');
+      return;
+    }
+    try {
+      await this.consoleJson(`/api/run/${action}`, { method: 'POST', body: '{}' });
+      this.sendJson(res, { ok: true });
+    } catch (error) {
+      this.sendJson(res, { error: `运行开关失败:${String(error instanceof Error ? error.message : error)}` });
+    }
+  }
+
+  /**
+   * 控制台状态轮询:页面连着才取,取到压成对话框要的几个数。失败保上一次的值,
+   * 只在失败沿报一次日志——控制台重启的那几秒不该刷屏。
+   */
+  private async pollStatus(): Promise<void> {
+    if (this.clients.size === 0 || this.consoleBase() === null || this.statusInFlight) return;
+    this.statusInFlight = true;
+    try {
+      const st = await this.consoleJson('/api/status') as Record<string, unknown>;
+      const loop = (st && typeof st.loop === 'object' && st.loop !== null) ? st.loop as Record<string, unknown> : {};
+      // 预算两处合成:core 在 loop.context 报物理上限,Persona 在顶层 context 报阶段预算,
+      // 后者覆盖前者——与控制台状态条同一套合成。
+      const ctxLoop = (typeof loop.context === 'object' && loop.context !== null) ? loop.context as Record<string, unknown> : {};
+      const ctxOwn = (typeof st.context === 'object' && st.context !== null) ? st.context as Record<string, unknown> : {};
+      const ctx = { ...ctxLoop, ...ctxOwn };
+      const num = (value: unknown): number | null =>
+        typeof value === 'number' && Number.isFinite(value) ? value : null;
+      this.dialogStatus = {
+        estTokens: num(loop.estTokens),
+        messageCount: num(loop.messageCount),
+        paused: loop.paused === true,
+        maxTokens: num(ctx.maxTokens),
+        softRatio: num(ctx.softRatio),
+        hardTokens: num(ctx.hardTokens),
+      };
+      this.statusFailing = false;
+    } catch (error) {
+      if (!this.statusFailing) {
+        this.statusFailing = true;
+        this.host?.log.warn('取控制台状态失败,对话框读数先用上一次的', { err: String(error) });
+      }
+    } finally {
+      this.statusInFlight = false;
+    }
   }
 
   /**
@@ -588,6 +816,8 @@ export class Live2DWorld implements World {
   async stop(): Promise<void> {
     if (this.pushTimer) clearInterval(this.pushTimer);
     this.pushTimer = null;
+    if (this.statusTimer) clearInterval(this.statusTimer);
+    this.statusTimer = null;
     for (const client of this.clients) {
       try { client.end(); } catch { /* 断开即可 */ }
     }
@@ -724,6 +954,14 @@ export class Live2DWorld implements World {
       this.receivePat(req, res);
       return;
     }
+    if (req.method === 'POST' && url.pathname === DIALOG_MODEL_PATH) {
+      void this.receiveDialogModel(req, res);
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === DIALOG_RUN_PATH) {
+      void this.receiveDialogRun(req, res);
+      return;
+    }
     if (req.method !== 'GET') {
       res.writeHead(405).end('only GET');
       return;
@@ -731,6 +969,8 @@ export class Live2DWorld implements World {
     try {
       if (url.pathname === '/') return this.sendPage(res);
       if (url.pathname === '/app.js') return this.sendFile(res, join(WEB_DIR, 'app.js'));
+      if (url.pathname === DIALOG_PROVIDERS_PATH) return void this.sendDialogProviders(res);
+      if (url.pathname === DIALOG_MODELS_PATH) return void this.sendDialogModels(url, res);
       if (url.pathname === '/pack/params.json') {
         return this.sendJson(res, this.pack?.params ?? {});
       }
@@ -748,6 +988,8 @@ export class Live2DWorld implements World {
         return this.sendJson(res, {
           enabled: this.cfg.consoleUrl !== '',
           agent: this.agentUrl() !== null,
+          // 对话框的读数与开关都走控制台:没配控制台,那一栏整个不出现。
+          console: this.cfg.consoleUrl !== '',
         });
       }
       if (url.pathname === '/pack/expressions.json') {
@@ -821,6 +1063,8 @@ export class Live2DWorld implements World {
     });
     res.write(': connected\n\n');
     this.clients.add(res);
+    // 页面一连上就先取一次状态:对话框的读数不用等第一个轮询拍。
+    void this.pollStatus();
     // 一接上就先给一帧,免得页面空着等下一次变化。
     res.write(`data: ${this.frame()}\n\n`);
     const keepalive = setInterval(() => {
@@ -867,6 +1111,8 @@ export class Live2DWorld implements World {
       mood: this.mood,
       clips: this.performance?.activeClips(nowMs).map((clip) => clip.clipId) ?? [],
       clients: this.clients.size,
+      // 对话框的读数(上下文用量/运行与否):控制台 /api/status 的轮询快照,没取到过是 null。
+      status: this.dialogStatus,
       // 页面版本:连着的旧页面比对后自刷新。放在帧尾,老页面的解析不受影响。
       page: this.pageVersion,
     });
@@ -1037,9 +1283,10 @@ export class Live2DWorld implements World {
         return address !== null && typeof address === 'object' ? address.port : attempt;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        if (code !== 'EADDRINUSE') throw error;
+        // EACCES 是 Windows 的保留端口段:对这个进程而言与被占用同义,同样向上找。
+        if (code !== 'EADDRINUSE' && code !== 'EACCES') throw error;
       }
     }
-    throw new Error(`端口 ${port} 起连续 ${PORT_ATTEMPTS} 个都被占用`);
+    throw new Error(`端口 ${port} 起连续 ${PORT_ATTEMPTS} 个都用不了`);
   }
 }

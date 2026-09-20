@@ -51,6 +51,11 @@
   var SYSTEM_SUBTITLE_MS = 6000;
   var AGENT_CHAT_PATH = '/agent/chat';
   var PANEL_MORE_KEY = 'cortico.live2d.panelMore';
+  /** 附图与控制台对话框同一套上限:8 张、长边 2048、单张 6MB(终端通道收 8MB)。 */
+  var MAX_IMAGES = 8;
+  var IMAGE_MAX_EDGE = 2048;
+  var IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+  var IMAGE_MIMES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
 
   /** 情绪六维的中文名;与 `bots/miku/persona/emotion.ts` 的维度同键。 */
   var EMOTION_LABELS = {
@@ -85,6 +90,16 @@
     composerForm: document.getElementById('composer-form'),
     composerInput: document.getElementById('composer-input'),
     history: document.getElementById('btn-history'),
+    tray: document.getElementById('tray'),
+    dialogBar: document.getElementById('dialog-bar'),
+    ctx: document.getElementById('ctx'),
+    ctxFill: document.getElementById('ctx-fill'),
+    ctxNum: document.getElementById('ctx-num'),
+    btnRun: document.getElementById('btn-run'),
+    btnModel: document.getElementById('btn-model'),
+    modelPop: document.getElementById('model-pop'),
+    btnAttach: document.getElementById('btn-attach'),
+    fileInput: document.getElementById('file-input'),
     panelMore: document.getElementById('panel-more'),
     panelMoreButton: document.getElementById('btn-panel'),
   };
@@ -141,6 +156,15 @@
   var useAgent = false;
   var subtitleText = '';
   var subtitleTimer = null;
+  // 附图:进托盘时归一化成 base64,发话时随文本走终端通道的 images 字段。
+  var attached = [];
+  var attachPending = 0;
+  var attachNote = '';
+  // 运行开关的真值来自状态帧;没取到过(还没轮询到)时按钮不动作。
+  var runPaused = null;
+  // 模型选择器:端点清单(/dialog/providers)与各实例的模型目录(/dialog/models)。
+  var providerList = null;
+  var modelCatalogs = {};
   var barFill = {};
   var barNum = {};
   var channelRows = {};
@@ -221,13 +245,49 @@
     if (el.composerForm) {
       el.composerForm.addEventListener('submit', function (event) {
         if (event && event.preventDefault) event.preventDefault();
+        if (attachPending > 0) return;   // 图还在归一化,别把半批发出去
         var text = el.composerInput ? String(el.composerInput.value || '').trim() : '';
-        if (text === '') return;
+        var images = attached.splice(0, attached.length);
+        if (text === '' && images.length === 0) return;
         if (el.composerInput) el.composerInput.value = '';
-        say(text);
+        attachNote = '';
+        renderTray();
+        say(text, images);
       });
     }
     if (el.history) el.history.addEventListener('click', toggleHistory);
+    if (el.btnAttach && el.fileInput) {
+      el.btnAttach.addEventListener('click', function () { el.fileInput.click(); });
+      el.fileInput.addEventListener('change', function (event) {
+        var target = event.currentTarget || {};
+        addFiles(target.files || []);
+        target.value = '';   // 同一张再选一次也要触发 change
+      });
+    }
+    // 拖图进输入区、往输入框里贴图,与点附图钮同一条路。
+    el.composer.addEventListener('dragover', function (event) {
+      var types = event.dataTransfer ? event.dataTransfer.types : null;
+      if (!types || Array.prototype.indexOf.call(types, 'Files') < 0) return;
+      event.preventDefault();
+      setDragover(true);
+    });
+    el.composer.addEventListener('dragleave', function () { setDragover(false); });
+    el.composer.addEventListener('drop', function (event) {
+      setDragover(false);
+      var files = event.dataTransfer ? event.dataTransfer.files : null;
+      if (!files || files.length === 0) return;
+      event.preventDefault();
+      addFiles(files);
+    });
+    if (el.composerInput) {
+      el.composerInput.addEventListener('paste', function (event) {
+        var all = event.clipboardData ? event.clipboardData.files : [];
+        var files = Array.prototype.filter.call(all, isImageFile);
+        if (files.length === 0) return;
+        event.preventDefault();
+        addFiles(files);
+      });
+    }
     fetch('/pack/chat.json', { cache: 'no-store' })
       .then(function (response) { return response.json(); })
       .then(function (info) {
@@ -238,22 +298,28 @@
         }
         el.composer.className = 'glass';
         if (!useAgent) openChat();
+        // 读数与开关都走控制台:没配控制台,那一栏整个不出现。
+        if (info.console && el.dialogBar) {
+          el.dialogBar.className = 'on';
+          bindDialogBar();
+        }
       })
       .catch(function () { showSubtitle('取 /pack/chat.json 失败,输入区没开。', true); });
   }
 
-  /** 我说了一句话:记在底部,再按接的是哪条路发出去。 */
-  function say(text) {
-    addMine(text);
+  /** 我说了一句话:记在底部,再按接的是哪条路发出去;图随文本一起走。 */
+  function say(text, images) {
+    addMine(text, images ? images.length : 0);
     if (useAgent) sendToAgent(text);
-    else sendChat(text);
+    else sendChat(text, images);
   }
 
   /** 我发过的话:平时只留最近一句,按「历史」展开;一条一行,不出现滚动条。 */
-  function addMine(text) {
+  function addMine(text, imageCount) {
     if (!el.mine) return;
     var line = document.createElement('div');
-    line.textContent = text;
+    var mark = imageCount > 0 ? '[图×' + imageCount + ']' : '';
+    line.textContent = text === '' ? mark : text + (mark ? ' ' + mark : '');
     el.mine.appendChild(line);
     while (el.mine.children.length > MINE_LINES) el.mine.removeChild(el.mine.children[0]);
     if (el.history) {
@@ -330,11 +396,20 @@
     };
   }
 
-  /** `text` 为 null 时只报上名字(连上就报一次)。 */
-  function sendChat(text) {
+  /** `text` 为 null 时只报上名字(连上就报一次);有图时随文本一起发。 */
+  function sendChat(text, images) {
     if (!chatSocket || chatSocket.readyState !== 1) return;
-    if (text === null) chatSocket.send(JSON.stringify({ type: 'hello', name: '制作人' }));
-    else chatSocket.send(JSON.stringify({ type: 'msg', text: text }));
+    if (text === null) {
+      chatSocket.send(JSON.stringify({ type: 'hello', name: '制作人' }));
+      return;
+    }
+    var payload = { type: 'msg', text: text };
+    if (images && images.length > 0) {
+      payload.images = images.map(function (img) {
+        return { mime: img.mime, base64: img.base64, name: img.name };
+      });
+    }
+    chatSocket.send(JSON.stringify(payload));
   }
 
   /** 外部 Agent:一句话 POST 到本 World,它转给 Agent 并把返回的增量流回来。 */
@@ -384,6 +459,422 @@
     }
     if (text !== '') appendSubtitle(text);
   }
+
+  // ── 对话框四件套:附图、上下文用量、运行开关、模型选择 ────────────────────
+  // 数据都在 World 那边转一手(/dialog/* 与状态帧),页面只连 18795 这一个来源。
+
+  function isImageFile(file) {
+    return file && IMAGE_MIMES.indexOf(file.type) >= 0;
+  }
+
+  function readAsDataURL(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error('读不进 ' + (file.name || '图片'))); };
+      reader.onload = function () { resolve(String(reader.result || '')); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /** 只缩不放:长边不超过上限的原样保留。 */
+  function fitWithin(width, height, maxEdge) {
+    var edge = Math.max(width, height);
+    if (!(edge > maxEdge) || maxEdge <= 0) return { width: width, height: height };
+    var scale = maxEdge / edge;
+    return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+  }
+
+  function encodeBitmap(bitmap, width, height, mime, quality) {
+    var canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    var ctx = canvas.getContext('2d');
+    if (!ctx) return Promise.reject(new Error('画不出缩放图'));
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    return new Promise(function (resolve, reject) {
+      canvas.toBlob(function (blob) {
+        if (blob) resolve(blob);
+        else reject(new Error('编码失败'));
+      }, mime, quality);
+    });
+  }
+
+  /**
+   * 归一化一张图:能解码就只缩不放(长边 2048),超字节上限退 JPEG;解码不了(或环境里没有
+   * 解码 API)就原样读 base64,由终端通道的字节上限把门。
+   */
+  function normalizeImage(file) {
+    if (!isImageFile(file)) {
+      return Promise.reject(new Error((file.name || '这个文件') + '不是 JPEG/PNG/WebP/GIF'));
+    }
+    var name = file.name || 'image';
+    if (typeof createImageBitmap !== 'function') {
+      if (file.size > IMAGE_MAX_BYTES) return Promise.reject(new Error(name + '超过 6MB'));
+      return readAsDataURL(file).then(function (url) {
+        return { name: name, mime: file.type, base64: url.slice(url.indexOf(',') + 1),
+                 bytes: file.size, width: 0, height: 0, src: url };
+      });
+    }
+    var bitmap = null;
+    return Promise.resolve().then(function () {
+      return createImageBitmap(file);
+    }).then(function (decoded) {
+      bitmap = decoded;
+      var fitted = fitWithin(bitmap.width, bitmap.height, IMAGE_MAX_EDGE);
+      var untouched = fitted.width === bitmap.width && fitted.height === bitmap.height
+        && file.size <= IMAGE_MAX_BYTES;
+      if (untouched) {
+        return readAsDataURL(file).then(function (url) {
+          return { name: name, mime: file.type, base64: url.slice(url.indexOf(',') + 1),
+                   bytes: file.size, width: bitmap.width, height: bitmap.height, src: url };
+        });
+      }
+      // 缩放后先试原格式(GIF 没有 canvas 编码器,退 PNG);超字节上限再退 JPEG。
+      var preferred = file.type === 'image/gif' ? 'image/png' : file.type;
+      return encodeBitmap(bitmap, fitted.width, fitted.height, preferred).then(function (blob) {
+        var mime = preferred;
+        var chain = Promise.resolve(blob);
+        if (blob.size > IMAGE_MAX_BYTES && preferred !== 'image/jpeg') {
+          chain = encodeBitmap(bitmap, fitted.width, fitted.height, 'image/jpeg', 0.85).then(function (jpeg) {
+            mime = 'image/jpeg';
+            return jpeg;
+          });
+        }
+        return chain.then(function (final) {
+          if (final.size > IMAGE_MAX_BYTES) throw new Error(name + '缩放后仍超过 6MB');
+          return readAsDataURL(final).then(function (url) {
+            return { name: name, mime: mime, base64: url.slice(url.indexOf(',') + 1),
+                     bytes: final.size, width: fitted.width, height: fitted.height, src: url };
+          });
+        });
+      });
+    }).then(function (image) {
+      if (bitmap) bitmap.close();
+      return image;
+    }, function (error) {
+      if (bitmap) bitmap.close();
+      throw error instanceof Error ? error : new Error(String(error));
+    });
+  }
+
+  /** 收一批文件:超张数整批拒;单张失败只报那一张,其余照收。 */
+  function addFiles(files) {
+    var list = Array.prototype.filter.call(files, isImageFile);
+    if (list.length === 0) return;
+    if (attached.length + attachPending + list.length > MAX_IMAGES) {
+      attachNote = '一条消息最多 ' + MAX_IMAGES + ' 张图';
+      renderTray();
+      return;
+    }
+    attachNote = '';
+    attachPending += list.length;
+    renderTray();
+    list.forEach(function (file) {
+      normalizeImage(file).then(function (image) {
+        attached.push(image);
+        renderTray();
+      }, function (error) {
+        attachNote = error.message || String(error);
+        renderTray();
+      }).then(function () {
+        attachPending -= 1;
+        renderTray();
+      });
+    });
+  }
+
+  /** 图托盘:缩略图、移除钮与拒收/处理中的说明。 */
+  function renderTray() {
+    if (!el.tray) return;
+    el.tray.textContent = '';
+    if (attachNote) {
+      var note = document.createElement('div');
+      note.className = 'note';
+      note.textContent = attachNote;
+      el.tray.appendChild(note);
+    }
+    attached.forEach(function (at) {
+      var thumb = document.createElement('div');
+      thumb.className = 'thumb';
+      thumb.title = at.name + ' · ' + Math.round(at.bytes / 1024) + 'KB'
+        + (at.width ? ' · ' + at.width + '×' + at.height : '');
+      var img = document.createElement('img');
+      img.src = at.src;
+      img.alt = at.name;
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.title = '移除 ' + at.name;
+      remove.addEventListener('click', function () {
+        var at2 = attached.indexOf(at);
+        if (at2 >= 0) attached.splice(at2, 1);
+        attachNote = '';
+        renderTray();
+      });
+      thumb.appendChild(img);
+      thumb.appendChild(remove);
+      el.tray.appendChild(thumb);
+    });
+    if (attachPending > 0) {
+      var pend = document.createElement('div');
+      pend.className = 'note';
+      pend.textContent = '处理 ' + attachPending + ' 张…';
+      el.tray.appendChild(pend);
+    }
+    el.tray.className = (attached.length > 0 || attachNote !== '' || attachPending > 0) ? 'on' : '';
+  }
+
+  function setDragover(on) {
+    if (!el.composer) return;
+    var has = el.composer.className.indexOf('dragover') >= 0;
+    if (on && !has) el.composer.className += ' dragover';
+    if (!on && has) el.composer.className = el.composer.className.replace(' dragover', '');
+  }
+
+  function fmtCount(n) {
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 10000) return (n / 1000).toFixed(1) + 'k';
+    return String(Math.round(n));
+  }
+
+  /** 运行开关的牌子;真值没到过之前只占位,不动作。 */
+  function renderRunChip() {
+    if (!el.btnRun) return;
+    el.btnRun.textContent = runPaused === null ? '运行 —' : (runPaused ? '已暂停' : '运行中');
+    el.btnRun.className = 'chip' + (runPaused === true ? ' paused' : '');
+    el.btnRun.title = runPaused === null ? '等状态读数' : (runPaused ? '她停着;点一下继续' : '点一下暂停她');
+  }
+
+  /** 状态帧 → 读数行:用量条按预算画,过软预警线变黄、满变红;运行牌子照帧里的画。 */
+  function renderStatus(status) {
+    if (!status || typeof status !== 'object') return;
+    var est = typeof status.estTokens === 'number' ? status.estTokens : null;
+    var max = typeof status.maxTokens === 'number' && status.maxTokens > 0
+      ? status.maxTokens
+      : (typeof status.hardTokens === 'number' && status.hardTokens > 0 ? status.hardTokens : null);
+    if (el.ctxNum) {
+      el.ctxNum.textContent = est === null ? '—'
+        : (max === null ? fmtCount(est) : fmtCount(est) + '/' + fmtCount(max));
+    }
+    if (el.ctx && el.ctxFill) {
+      var ratio = est !== null && max !== null ? est / max : 0;
+      el.ctxFill.style.width = (Math.min(1, Math.max(0, ratio)) * 100).toFixed(1) + '%';
+      var soft = typeof status.softRatio === 'number' ? status.softRatio : null;
+      el.ctx.className = ratio >= 1 ? 'danger' : (soft !== null && ratio >= soft ? 'warn' : '');
+      el.ctx.title = '她的上下文用量' + (max !== null ? '(预算 ' + fmtCount(max) + ')' : '');
+    }
+    runPaused = status.paused === true;
+    renderRunChip();
+  }
+
+  function postJson(url, body) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(function (response) {
+      return response.json();
+    }).catch(function () {
+      return { error: '连不上' };
+    });
+  }
+
+  function bindDialogBar() {
+    if (el.btnRun) {
+      el.btnRun.addEventListener('click', function () {
+        if (runPaused === null) return;   // 还没取到状态,不知道往哪边扳
+        var action = runPaused ? 'resume' : 'pause';
+        postJson('/dialog/run', { action: action }).then(function (out) {
+          if (out && out.ok) {
+            runPaused = !runPaused;   // 先照新值画,下一帧状态来了自然对齐
+            renderRunChip();
+          } else {
+            showSubtitle((out && out.error) || '运行开关失败', true);
+          }
+        });
+      });
+    }
+    if (el.btnModel) el.btnModel.addEventListener('click', toggleModelPop);
+    if (el.modelPop && document.addEventListener) {
+      document.addEventListener('pointerdown', function (event) {
+        if (el.modelPop.className.indexOf('on') < 0) return;
+        var target = event.target;
+        if (target === el.btnModel || target === el.modelPop) return;
+        for (var i = 0; i < el.modelPop.children.length; i++) {
+          if (el.modelPop.children[i] === target) return;
+        }
+        closeModelPop();
+      });
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') closeModelPop();
+      });
+    }
+  }
+
+  function toggleModelPop() {
+    if (!el.modelPop) return;
+    if (el.modelPop.className.indexOf('on') >= 0) {
+      closeModelPop();
+      return;
+    }
+    el.modelPop.className = 'glass on';
+    refreshModelPop();
+  }
+
+  function closeModelPop() {
+    if (el.modelPop) el.modelPop.className = 'glass';
+  }
+
+  function refreshModelPop() {
+    if (!el.modelPop) return;
+    el.modelPop.textContent = '';
+    var loading = document.createElement('div');
+    loading.className = 'note';
+    loading.textContent = '取端点清单…';
+    el.modelPop.appendChild(loading);
+    fetch('/dialog/providers', { cache: 'no-store' })
+      .then(function (response) { return response.json(); })
+      .then(function (data) {
+        if (!el.modelPop || el.modelPop.className.indexOf('on') < 0) return;   // 已经收起
+        if (data && data.error) { renderModelError(data.error); return; }
+        providerList = data;
+        renderModelPop(null);
+      })
+      .catch(function (error) { renderModelError(String(error)); });
+  }
+
+  function renderModelError(message) {
+    if (!el.modelPop) return;
+    el.modelPop.textContent = '';
+    var note = document.createElement('div');
+    note.className = 'note';
+    note.textContent = message;
+    el.modelPop.appendChild(note);
+  }
+
+  /** 画端点清单;expanded 是已展开模型目录的实例名。 */
+  function renderModelPop(expanded) {
+    if (!el.modelPop || !providerList) return;
+    el.modelPop.textContent = '';
+    var active = providerList.active || '';
+    if (el.btnModel) {
+      var hit = null;
+      providerList.instances.forEach(function (instance) {
+        if (instance.name === active) hit = instance;
+      });
+      el.btnModel.textContent = '模型 ' + (hit ? (hit.model || hit.name) : (active || '—'));
+      el.btnModel.title = hit
+        ? '当前:' + hit.name + (hit.model ? ' · ' + hit.model : '')
+        : '换她跑在哪个模型上';
+    }
+    if (!providerList.instances.length) {
+      var empty = document.createElement('div');
+      empty.className = 'note';
+      empty.textContent = '没有端点实例;去控制台「语言模型」页配一个。';
+      el.modelPop.appendChild(empty);
+      return;
+    }
+    providerList.instances.forEach(function (instance) {
+      var row = document.createElement('div');
+      row.className = 'mrow' + (instance.name === active ? ' active' : '');
+      var who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = instance.name;
+      var what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = instance.model || '(未设模型)';
+      row.appendChild(who);
+      row.appendChild(what);
+      row.title = '切到 ' + instance.name + (instance.model ? '(' + instance.model + ')' : '');
+      row.addEventListener('click', function () { activateInstance(instance.name); });
+      el.modelPop.appendChild(row);
+      if (expanded === instance.name) renderCatalogRows(instance);
+    });
+  }
+
+  /** 某个实例的模型目录:取到过就画成缩进的子行,当前模型打点。 */
+  function renderCatalogRows(instance) {
+    var catalog = modelCatalogs[instance.name];
+    if (!catalog) {
+      var loading = document.createElement('div');
+      loading.className = 'note';
+      loading.textContent = '取模型列表…';
+      el.modelPop.appendChild(loading);
+      return;
+    }
+    if (catalog.error) {
+      var failed = document.createElement('div');
+      failed.className = 'note';
+      failed.textContent = '取不到模型列表:' + catalog.error;
+      el.modelPop.appendChild(failed);
+      return;
+    }
+    (catalog.models || []).forEach(function (entry) {
+      var row = document.createElement('div');
+      row.className = 'mrow sub' + (entry.id === instance.model ? ' active' : '');
+      var what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = entry.id;
+      row.appendChild(what);
+      row.title = '切到 ' + instance.name + ' · ' + entry.id;
+      row.addEventListener('click', function (event) {
+        if (event && event.stopPropagation) event.stopPropagation();
+        activateModel(instance.name, entry.id);
+      });
+      el.modelPop.appendChild(row);
+    });
+  }
+
+  /** 切端点实例;切完展开它的模型目录,再点子行才在实例内换模型名。 */
+  function activateInstance(name) {
+    postJson('/dialog/model', { name: name }).then(function (out) {
+      if (!out || !out.ok) {
+        showSubtitle((out && out.error) || '换模型失败', true);
+        return;
+      }
+      if (providerList) providerList.active = name;
+      if (modelCatalogs[name] === undefined) {
+        modelCatalogs[name] = null;   // 取的路上
+        renderModelPop(name);
+        fetch('/dialog/models?name=' + encodeURIComponent(name), { cache: 'no-store' })
+          .then(function (response) { return response.json(); })
+          .then(function (data) {
+            modelCatalogs[name] = data && data.error ? { error: data.error } : data;
+            if (el.modelPop && el.modelPop.className.indexOf('on') >= 0) renderModelPop(name);
+          })
+          .catch(function (error) {
+            modelCatalogs[name] = { error: String(error) };
+            if (el.modelPop && el.modelPop.className.indexOf('on') >= 0) renderModelPop(name);
+          });
+      } else {
+        renderModelPop(name);
+      }
+      var shown = null;
+      providerList.instances.forEach(function (instance) {
+        if (instance.name === name) shown = instance;
+      });
+      showSubtitle('已切到 ' + name + (shown && shown.model ? '(' + shown.model + ')' : ''), true);
+    });
+  }
+
+  /** 实例内换模型名:World 会保住模型档的其余键,只改 model。 */
+  function activateModel(name, model) {
+    postJson('/dialog/model', { name: name, model: model }).then(function (out) {
+      if (!out || !out.ok) {
+        showSubtitle((out && out.error) || '换模型失败', true);
+        return;
+      }
+      if (providerList) {
+        providerList.active = name;
+        providerList.instances.forEach(function (instance) {
+          if (instance.name === name) instance.model = model;
+        });
+      }
+      renderModelPop(name);
+      showSubtitle('已切到 ' + name + ' · ' + model, true);
+    });
+  }
+
   /** 面板上的取景控件:滑块与拖动都只改 `view`,改完立刻套到模型上。 */
   function bindControls() {
     if (el.zoom) {
@@ -908,6 +1399,7 @@
       }
       speaking = nowSpeaking;
       showState(payload);
+      renderStatus(payload.status);
     };
   }
 

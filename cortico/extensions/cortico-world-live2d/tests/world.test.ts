@@ -493,6 +493,188 @@ describe('对话框', () => {
   });
 });
 
+describe('对话框的控制台代理', () => {
+  /** 假控制台:真的 HTTP 服务端,把对话框四件套要的端点都摆出来,并记下收到的请求。 */
+  async function fakeConsole(): Promise<{
+    server: ReturnType<typeof createServer>;
+    port: number;
+    seen: Array<{ method: string; path: string; body: string }>;
+  }> {
+    const seen: Array<{ method: string; path: string; body: string }> = [];
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      req.on('end', () => {
+        const path = req.url ?? '/';
+        seen.push({ method: req.method ?? 'GET', path, body });
+        if (path === '/api/status') {
+          res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+            displayName: '初音未来',
+            loop: { estTokens: 120000, messageCount: 30, paused: false, context: { hardTokens: 130000 } },
+            context: { maxTokens: 240000, softRatio: 0.85 },
+          }));
+          return;
+        }
+        if (path === '/api/console/manifest') {
+          res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+            providers: [
+              { id: 'llm:chat', kind: 'llm' },
+              { id: 'llm:ollama', kind: 'llm' },
+              { id: 'world:sample', kind: 'world' },
+            ],
+          }));
+          return;
+        }
+        const state = /^\/api\/console\/providers\/([^/]+)\/panels\/settings\/state$/.exec(path);
+        if (state && req.method === 'GET') {
+          const page = decodeURIComponent(state[1]!);
+          res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+            active: 'deepseek',
+            instances: page === 'llm:chat'
+              ? [{ name: 'deepseek', entry: { kind: 'chat', spec: { model: 'miku-x', thinking: true } } }]
+              : [{ name: 'ollama', entry: { kind: 'ollama', spec: { model: 'r1' } } }],
+          }));
+          return;
+        }
+        if (path.endsWith('/panels/settings/models') && req.method === 'POST') {
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+            .end(JSON.stringify({ models: [{ id: 'miku-x' }, { id: 'miku-y' }] }));
+          return;
+        }
+        if (path.endsWith('/panels/settings/activate') && req.method === 'POST') {
+          res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: true }));
+          return;
+        }
+        if (path === '/api/run/pause' || path === '/api/run/resume') {
+          res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: true }));
+          return;
+        }
+        res.writeHead(404).end('not found');
+      });
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', () => done()));
+    return { server, port: (server.address() as AddressInfo).port, seen };
+  }
+
+  const closeServer = (server: ReturnType<typeof createServer>): Promise<void> =>
+    new Promise<void>((done) => server.close(() => done()));
+
+  it('端点清单:manifest 里 llm 页各取 state,合成一页能用的平表', async () => {
+    const fake = await fakeConsole();
+    try {
+      await start({ consoleUrl: `http://127.0.0.1:${fake.port}` });
+      const out = await (await fetch(url('/dialog/providers'))).json();
+      expect(out).toEqual({
+        active: 'deepseek',
+        instances: [
+          { name: 'deepseek', kind: 'chat', model: 'miku-x', page: 'llm:chat' },
+          { name: 'ollama', kind: 'ollama', model: 'r1', page: 'llm:ollama' },
+        ],
+      });
+    } finally {
+      await closeServer(fake.server);
+    }
+  });
+
+  it('实例内换模型:保住模型档的其余键,只改 model', async () => {
+    const fake = await fakeConsole();
+    try {
+      await start({ consoleUrl: `http://127.0.0.1:${fake.port}` });
+      const response = await fetch(url('/dialog/model'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'deepseek', model: 'miku-y' }),
+      });
+      expect(await response.json()).toMatchObject({ ok: true });
+      const activate = fake.seen.find((entry) => entry.path.endsWith('/panels/settings/activate'));
+      expect(activate).toBeTruthy();
+      expect(JSON.parse(activate!.body).args[0]).toEqual({
+        name: 'deepseek',
+        spec: { model: 'miku-y', thinking: true },
+      });
+    } finally {
+      await closeServer(fake.server);
+    }
+  });
+
+  it('只换端点实例不带 spec;模型目录与运行开关各转各的端点', async () => {
+    const fake = await fakeConsole();
+    try {
+      await start({ consoleUrl: `http://127.0.0.1:${fake.port}` });
+      await fetch(url('/dialog/model'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'ollama' }),
+      });
+      const activate = fake.seen.find((entry) => entry.path.endsWith('/panels/settings/activate'));
+      expect(JSON.parse(activate!.body).args[0]).toEqual({ name: 'ollama' });
+
+      const models = await (await fetch(url('/dialog/models?name=deepseek'))).json();
+      expect(models).toEqual({ models: [{ id: 'miku-x' }, { id: 'miku-y' }] });
+      expect(fake.seen.some((entry) =>
+        entry.method === 'POST' && entry.path.endsWith('/panels/settings/models')
+        && entry.body.includes('"deepseek"'))).toBe(true);
+
+      await fetch(url('/dialog/run'), { method: 'POST', body: '{"action":"pause"}' });
+      expect(fake.seen.some((entry) => entry.method === 'POST' && entry.path === '/api/run/pause')).toBe(true);
+    } finally {
+      await closeServer(fake.server);
+    }
+  });
+
+  it('状态轮询:页面一连上,帧里带上对话框要的读数', async () => {
+    const fake = await fakeConsole();
+    try {
+      await start({ consoleUrl: `http://127.0.0.1:${fake.port}` });
+      const controller = new AbortController();
+      const response = await fetch(url('/state'), { signal: controller.signal });
+      const reader = response.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let status: Record<string, unknown> | null = null;
+      const deadline = Date.now() + 5000;
+      while (status === null && Date.now() < deadline) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split('\n\n');
+        buffer = blocks.pop() ?? '';
+        for (const block of blocks) {
+          const match = /^data: (.*)$/m.exec(block);
+          if (!match) continue;
+          const payload = JSON.parse(match[1]!) as { status?: Record<string, unknown> | null };
+          if (payload.status) { status = payload.status; break; }
+        }
+      }
+      controller.abort();
+      expect(status).toMatchObject({
+        estTokens: 120000, messageCount: 30, paused: false,
+        maxTokens: 240000, softRatio: 0.85, hardTokens: 130000,
+      });
+    } finally {
+      await closeServer(fake.server);
+    }
+  });
+
+  it('没配控制台:代理端点回 409,帧里 status 是 null', async () => {
+    await start();
+    expect((await fetch(url('/dialog/providers'))).status).toBe(409);
+    expect((await fetch(url('/dialog/models?name=x'))).status).toBe(409);
+    expect((await fetch(url('/dialog/model'), { method: 'POST', body: '{}' })).status).toBe(409);
+    expect((await fetch(url('/dialog/run'), { method: 'POST', body: '{"action":"pause"}' })).status).toBe(409);
+    const controller = new AbortController();
+    const frame = await firstFrame(controller.signal) as { status: unknown };
+    controller.abort();
+    expect(frame.status).toBeNull();
+  });
+
+  it('控制台不在:端点清单给一句能读懂的话,不炸', async () => {
+    await start({ consoleUrl: 'http://127.0.0.1:1' });
+    const out = await (await fetch(url('/dialog/providers'))).json() as { error?: unknown };
+    expect(String(out.error)).toContain('取端点清单失败');
+  });
+});
+
 describe('外部 Agent 接入', () => {
   it('没配 Agent 时明确回绝,不装作能接', async () => {
     await start();

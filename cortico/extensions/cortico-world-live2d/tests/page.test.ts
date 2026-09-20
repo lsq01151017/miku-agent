@@ -23,10 +23,13 @@ interface FakeNode {
   children: FakeNode[];
   handlers: Record<string, Array<(event: Record<string, unknown>) => void>>;
   innerHTML: string;
+  /** 点过几次(附图钮点开文件选择器这类主动作)。 */
+  clicks: number;
   appendChild: (child: FakeNode) => FakeNode;
   removeChild: (child: FakeNode) => void;
   addEventListener: (type: string, fn: (event: Record<string, unknown>) => void) => void;
   fire: (type: string, event?: Record<string, unknown>) => void;
+  click: () => void;
 }
 
 /** 一次性的浏览器替身:记录页面写进模型的参数、面板上的数与取景,以及对话框。 */
@@ -46,6 +49,8 @@ function stubBrowser(): {
   headBounds: { x: number; y: number; width: number; height: number };
   /** 触发 window 上的事件(页面用它接指针)。 */
   fireWindow: (type: string, event: Record<string, unknown>) => void;
+  /** 触发 document 上的事件(模型选择器的收起走这里)。 */
+  fireDocument: (type: string, event: Record<string, unknown>) => void;
   /** 跑 n 帧:每帧先走页面的 requestAnimationFrame,再走模型的 beforeModelUpdate。 */
   pump: (frames: number) => void;
 } {
@@ -65,9 +70,13 @@ function stubBrowser(): {
   const blink = 0.8;
 
   const makeNode = (id: string): FakeNode => {
+    let textValue = '';
     const node: FakeNode = {
-      id, className: '', textContent: '', value: '', style: {}, children: [],
-      handlers: {},
+      id, className: '', value: '', style: {}, children: [],
+      handlers: {}, clicks: 0,
+      // 与真 DOM 一致:写 textContent 会清掉子节点(渲染函数靠它整块重画)。
+      get textContent() { return textValue; },
+      set textContent(value: string) { textValue = value; node.children.length = 0; },
       appendChild(child) { node.children.push(child); return child; },
       removeChild(child) {
         const at = node.children.indexOf(child);
@@ -76,6 +85,7 @@ function stubBrowser(): {
       },
       addEventListener(type, fn) { (node.handlers[type] = node.handlers[type] ?? []).push(fn); },
       fire(type, event) { for (const fn of node.handlers[type] ?? []) fn(event ?? {}); },
+      click() { node.clicks += 1; },
       get innerHTML() { return ''; },
       set innerHTML(_value: string) { node.children.length = 0; },
     };
@@ -129,13 +139,17 @@ function stubBrowser(): {
 
   const globals = globalThis as Record<string, unknown>;
   // 这些全局会一直被后面的测试文件用到:进来之前先存一份,跑完原样还回去。
-  for (const key of ['document', 'window', 'requestAnimationFrame', 'PIXI', 'fetch', 'EventSource', 'performance', 'WebSocket']) {
+  for (const key of ['document', 'window', 'requestAnimationFrame', 'PIXI', 'fetch', 'EventSource', 'performance', 'WebSocket', 'FileReader']) {
     if (!saved.has(key)) saved.set(key, globals[key]);
   }
   globals.performance = { now: () => fakeNowMs };
+  const documentHandlers: Record<string, Array<(event: Record<string, unknown>) => void>> = {};
   globals.document = {
     getElementById: (id: string) => nodeFor(id),
     createElement: (tag: string) => makeNode(tag),
+    addEventListener: (type: string, fn: (event: Record<string, unknown>) => void) => {
+      (documentHandlers[type] = documentHandlers[type] ?? []).push(fn);
+    },
   };
   const windowHandlers: Record<string, Array<(event: Record<string, unknown>) => void>> = {};
   globals.window = {
@@ -182,14 +196,41 @@ function stubBrowser(): {
   const posted: Array<{ url: string; body: string }> = [];
   /** 页面自刷新的次数:帧里的版本与入口注入的不符时刷新。 */
   const reloads: number[] = [];
+  // 附图走 FileReader 读 base64(测试环境没有 createImageBitmap,页面会走原样读入那条路)。
+  globals.FileReader = class {
+    onerror: (() => void) | null = null;
+    onload: (() => void) | null = null;
+    result = '';
+    readAsDataURL(file: { type: string; fakeB64?: string }): void {
+      this.result = `data:${file.type};base64,${file.fakeB64 ?? ''}`;
+      this.onload?.();
+    }
+  };
   globals.fetch = async (url: string, opts?: { method?: string; body?: string }) => {
-    if (opts && opts.method === 'POST') posted.push({ url: String(url), body: String(opts.body) });
+    const target = String(url);
+    if (opts && opts.method === 'POST') {
+      posted.push({ url: target, body: String(opts.body) });
+      return {
+        json: async () => (target.includes('/dialog/') ? { ok: true } : {}),
+      };
+    }
     return {
       json: async () => {
-        const target = String(url);
         if (target.includes('overrides')) return { Param137: 1 };
-        if (target.includes('chat.json')) return { enabled: true, agent: false };
+        if (target.includes('chat.json')) return { enabled: true, agent: false, console: true };
         if (target.includes('pat.json')) return { headMeshes: ['ArtMesh207'] };
+        if (target.includes('/dialog/providers')) {
+          return {
+            active: 'deepseek',
+            instances: [
+              { name: 'deepseek', kind: 'chat', model: 'miku-x', page: 'llm:chat' },
+              { name: 'ollama', kind: 'ollama', model: 'r1', page: 'llm:ollama' },
+            ],
+          };
+        }
+        if (target.includes('/dialog/models')) {
+          return { models: [{ id: 'miku-x' }, { id: 'miku-y' }] };
+        }
         return {
           FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
           MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
@@ -212,6 +253,9 @@ function stubBrowser(): {
     written, scales, positions, nodes, stored, instances, sockets, posted, reloads, headBounds,
     fireWindow: (type: string, event: Record<string, unknown>) => {
       for (const fn of windowHandlers[type] ?? []) fn(event);
+    },
+    fireDocument: (type: string, event: Record<string, unknown>) => {
+      for (const fn of documentHandlers[type] ?? []) fn(event);
     },
     pump: (frames: number) => {
       for (let i = 0; i < frames; i++) {
@@ -521,5 +565,122 @@ describe('播放器页面', () => {
     expect(stubs.reloads).toHaveLength(0);   // 与入口注入的一致:不刷
     send({ channels: {}, speaking: false, page: 'ff00ff00' });
     expect(stubs.reloads).toHaveLength(1);   // 不一致:这份页面是旧的,刷新成新的
+
+    // ── 对话框读数行:状态帧里的用量与运行态照实画 ──────────────────────────
+    expect(node('dialog-bar').className).toBe('on');   // 配了控制台,读数行出现
+    send({
+      channels: {}, speaking: false,
+      status: { estTokens: 120000, messageCount: 30, paused: false, maxTokens: 240000, softRatio: 0.85, hardTokens: 130000 },
+    });
+    expect(node('ctx-num').textContent).toBe('120.0k/240.0k');
+    expect(node('ctx-fill').style.width).toBe('50.0%');
+    expect(node('ctx').className).toBe('');
+    expect(node('btn-run').textContent).toBe('运行中');
+    // 过软预警线变黄,满过预算变红;暂停态照帧里画。
+    send({ channels: {}, speaking: false, status: { estTokens: 210000, paused: false, maxTokens: 240000, softRatio: 0.85 } });
+    expect(node('ctx').className).toBe('warn');
+    send({ channels: {}, speaking: false, status: { estTokens: 250000, paused: true, maxTokens: 240000, softRatio: 0.85 } });
+    expect(node('ctx').className).toBe('danger');
+    expect(node('btn-run').textContent).toBe('已暂停');
+    expect(node('btn-run').className).toContain('paused');
+
+    // 运行开关:按当前态往反方向扳,POST /dialog/run。
+    node('btn-run').fire('click');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(stubs.posted.some((p) => p.url === '/dialog/run' && p.body.includes('"action":"resume"'))).toBe(true);
+    expect(node('btn-run').textContent).toBe('运行中');   // 先照新值画,下一帧自然对齐
+
+    // ── 模型选择器:清单、激活点、实例内换名 ────────────────────────────────
+    node('btn-model').fire('click');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(node('model-pop').className).toContain('on');
+    expect(node('btn-model').textContent).toBe('模型 miku-x');
+    const rows = node('model-pop').children.filter((child) => child.className.indexOf('mrow') >= 0);
+    expect(rows.length).toBe(2);
+    expect(rows[0]!.className).toContain('active');       // deepseek 是激活端点
+    // 点端点行:POST activate(不带 model),然后展开它的模型目录。
+    rows[0]!.fire('click');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(stubs.posted.some((p) => p.url === '/dialog/model'
+      && p.body.includes('"name":"deepseek"') && !p.body.includes('"model"'))).toBe(true);
+    const subs = node('model-pop').children.filter((child) => child.className.indexOf('sub') >= 0);
+    expect(subs.map((sub) => sub.children[0]!.textContent)).toEqual(['miku-x', 'miku-y']);
+    // 点子行:带 model 的 activate,按钮标签跟着换。
+    subs[1]!.fire('click');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(stubs.posted.some((p) => p.url === '/dialog/model' && p.body.includes('"model":"miku-y"'))).toBe(true);
+    expect(node('btn-model').textContent).toBe('模型 miku-y');
+    // 点到弹出单外面:收起。
+    stubs.fireDocument('pointerdown', { target: {} });
+    expect(node('model-pop').className).not.toContain('on');
+
+    // ── 附图:选图进托盘,随文本一起发;拖入与粘贴同一条路 ───────────────────
+    node('btn-attach').fire('click');
+    expect(node('file-input').clicks).toBe(1);            // 附图钮点开文件选择器
+    node('file-input').fire('change', {
+      currentTarget: {
+        files: [
+          { name: 'a.png', type: 'image/png', size: 1234, fakeB64: 'QUJD' },
+          { name: 'b.jpg', type: 'image/jpeg', size: 2048, fakeB64: 'QkNE' },
+        ],
+        value: '',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    let thumbs = node('tray').children.filter((child) => child.className === 'thumb');
+    expect(thumbs.length).toBe(2);
+    expect(node('tray').className).toBe('on');
+    // 移除一张:托盘少一张,其余不动。
+    thumbs[1]!.children[1]!.fire('click');
+    thumbs = node('tray').children.filter((child) => child.className === 'thumb');
+    expect(thumbs.length).toBe(1);
+    // 拖图进输入区:墨线换虚线,松手进托盘。
+    node('composer').fire('dragover', { dataTransfer: { types: ['Files'] }, preventDefault: () => {} });
+    expect(node('composer').className).toContain('dragover');
+    node('composer').fire('drop', {
+      dataTransfer: { files: [{ name: 'c.png', type: 'image/png', size: 100, fakeB64: 'Q0NE' }] },
+      preventDefault: () => {},
+    });
+    expect(node('composer').className).not.toContain('dragover');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(node('tray').children.filter((child) => child.className === 'thumb').length).toBe(2);
+    // 往输入框里贴图也进托盘。
+    node('composer-input').fire('paste', {
+      clipboardData: { files: [{ name: 'd.png', type: 'image/png', size: 50, fakeB64: 'REQ=' }] },
+      preventDefault: () => {},
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(node('tray').children.filter((child) => child.className === 'thumb').length).toBe(3);
+    // 发话:文本带图一起走 images 字段,底部记一行带图标记,托盘清空。
+    node('composer-input').value = '看这张';
+    node('composer-form').fire('submit', { preventDefault: () => {} });
+    const withImages = stubs.sockets[0]!.sent.filter((s) => s.includes('"msg"')).pop()!;
+    expect(withImages).toContain('"text":"看这张"');
+    expect(withImages).toContain('"images"');
+    expect(withImages).toContain('"name":"a.png"');
+    expect(withImages).toContain('"base64":"QUJD"');
+    expect(node('mine').children[node('mine').children.length - 1]!.textContent).toBe('看这张 [图×3]');
+    expect(node('tray').className).toBe('');
+    // 只发图不发字:也发得出去。
+    node('file-input').fire('change', {
+      currentTarget: { files: [{ name: 'e.png', type: 'image/png', size: 10, fakeB64: 'RQ==' }], value: '' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    node('composer-input').value = '';
+    node('composer-form').fire('submit', { preventDefault: () => {} });
+    const imageOnly = stubs.sockets[0]!.sent.filter((s) => s.includes('"msg"')).pop()!;
+    expect(imageOnly).toContain('"text":""');
+    expect(imageOnly).toContain('"name":"e.png"');
+    expect(node('mine').children[node('mine').children.length - 1]!.textContent).toBe('[图×1]');
+    // 超张数整批拒:托盘里给一句理由,一张不多收。
+    node('file-input').fire('change', {
+      currentTarget: {
+        files: Array.from({ length: 9 }, (_, i) => ({ name: `x${i}.png`, type: 'image/png', size: 10, fakeB64: 'eA==' })),
+        value: '',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(node('tray').children.some((child) => child.className === 'note' && child.textContent.includes('最多'))).toBe(true);
+    expect(node('tray').children.filter((child) => child.className === 'thumb').length).toBe(0);
   });
 });
