@@ -148,7 +148,8 @@ const definition: BotDefinition<MikuConfig> = {
     context: { ...MIKU_CONTEXT_DEFAULTS, ...CORE_DEFAULTS.context },
     rounds: { soft: 6, hard: 12 },
     // 词表分析默认开着;它不可靠时可以整层关掉,状态冻结在当前值。
-    emotion: { enabled: true, maxStepPerTurn: 0.3, decayScale: 1 },
+    // 摸头每天最多把心情抬 0.25:疼爱要有回应,也不能靠摸头把羁绊刷满。
+    emotion: { enabled: true, maxStepPerTurn: 0.3, decayScale: 1, patDailyGain: 0.25 },
     // 端点收不到请求体的 `tools` 时,部署把它打开。默认关:能投递声明的端点不需要重述。
     toolProtocol: { enabled: false },
     // 常驻层的全文每轮进前缀,所以它比 active 小一个量级。7 条约是 7 份短备忘。

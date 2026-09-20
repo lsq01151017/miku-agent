@@ -33,6 +33,10 @@ export interface EmotionState {
   updatedAt: number;
   /** 累计经过的唤醒数,面板显示用。 */
   turns: number;
+  /** 摸头数值记在哪一天(本地日期);跨天预算翻篇。 */
+  patDate?: string;
+  /** 当天摸头已得的数值,以一轮的心情增量为单位。 */
+  patGain?: number;
 }
 
 /** 心情 → 它此刻该怎样说话。没有数值,只有措辞。 */
@@ -170,6 +174,50 @@ export function missEffect(state: EmotionState, now: number): string[] {
   state.values.loneliness = after;
   state.mood = moodOf(state.values);
   return [`${Math.round(hours)} 小时没人说话,寂寞 ${before.toFixed(2)}→${after.toFixed(2)}(想念累积)`];
+}
+
+/** 摸头一轮的增量:被安抚的舒服,心情与羁绊向上,活力小幅向上。 */
+export const PAT_DELTAS: Readonly<Partial<Values>> = { valence: 0.05, arousal: 0.03, bond: 0.06 };
+
+/** 每日预算的计量单位:一轮的心情增量。 */
+const PAT_UNIT = PAT_DELTAS.valence!;
+
+/** 当日日期(本地时区);摸头的每日预算按它翻篇。 */
+function todayOf(now: number): string {
+  const d = new Date(now);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * 摸头增量,按当日预算折算。预算以心情的增量计:用尽后本轮不再给数值,只报原因;
+ * 余额不足时按比例给,不越过预算。日期一翻,预算重新开始。
+ */
+export function patEffect(
+  state: EmotionState,
+  now: number,
+  dailyBudget: number,
+): { deltas: Partial<Values>; reason: string } {
+  const today = todayOf(now);
+  if (state.patDate !== today) {
+    state.patDate = today;
+    state.patGain = 0;
+  }
+  const gained = state.patGain ?? 0;
+  const room = dailyBudget - gained;
+  if (room <= 1e-6) {
+    return { deltas: {}, reason: `今日摸头已到上限(心情+${dailyBudget.toFixed(2)}),舒服归舒服,数值不再涨` };
+  }
+  const fraction = Math.min(1, room / PAT_UNIT);
+  const deltas: Partial<Values> = {};
+  for (const [dimension, raw] of Object.entries(PAT_DELTAS)) {
+    deltas[dimension as Dimension] = (raw as number) * fraction;
+  }
+  state.patGain = gained + PAT_UNIT * fraction;
+  const note = fraction < 1 ? `,余额不足按 ${Math.round(fraction * 100)}% 计` : '';
+  return {
+    deltas,
+    reason: `被摸了摸头 → 心情+${deltas.valence!.toFixed(2)}, 活力+${deltas.arousal!.toFixed(2)}, 羁绊+${deltas.bond!.toFixed(2)}${note}`,
+  };
 }
 
 /**

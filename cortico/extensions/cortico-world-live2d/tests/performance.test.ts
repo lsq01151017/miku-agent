@@ -218,6 +218,17 @@ describe('表现引擎', () => {
     expect(performance.channelsAt(0)).toMatchObject({ MouthSmile: 0.2 });
   });
 
+  it('摸头的伴随通道值叠进合成,结束就清掉;与表情伴随是两层', () => {
+    const performance = new Performance(pack, { idleAmount: 0 });
+    performance.setBaseline({ MouthSmile: 0.2 });
+    performance.setStaging({ EyeOpenLeft: -0.5 });
+    performance.setPat({ EyeOpenLeft: -1, MouthSmile: 0.2 });
+    // 闭眼(-1)被量程裁住,嘴角在两层之上再放松一点。
+    expect(performance.channelsAt(0)).toMatchObject({ EyeOpenLeft: -1, MouthSmile: 0.4 });
+    performance.setPat(null);
+    expect(performance.channelsAt(0)).toMatchObject({ EyeOpenLeft: -0.5, MouthSmile: 0.2 });
+  });
+
   it('待机动作一直在:没有片段时通道也随时间变,同一时刻算出同一组值', () => {
     const performance = new Performance(pack);
     const a = performance.channelsAt(1000);

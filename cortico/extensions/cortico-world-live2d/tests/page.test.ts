@@ -37,6 +37,8 @@ function stubBrowser(): {
   stored: string[];
   instances: Array<{ onmessage: ((event: { data: string }) => void) | null }>;
   sockets: Array<{ url: string; sent: string[]; readyState: number; fire: (data: string) => void }>;
+  /** 页面发出去的 POST(摸头的心跳)。 */
+  posted: Array<{ url: string; body: string }>;
   /** 触发 window 上的事件(页面用它接指针)。 */
   fireWindow: (type: string, event: Record<string, unknown>) => void;
   /** 跑 n 帧:每帧先走页面的 requestAnimationFrame,再走模型的 beforeModelUpdate。 */
@@ -158,20 +160,25 @@ function stubBrowser(): {
     Application: class { renderer = { resize: () => {} }; stage = { addChild: () => {} }; },
     live2d: { Live2DModel: { from: async () => model } },
   };
-  globals.fetch = async (url: string) => ({
-    json: async () => {
-      const target = String(url);
-      if (target.includes('overrides')) return { Param137: 1 };
-      if (target.includes('chat.json')) return { enabled: true, agent: false };
-      return {
-        FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
-        MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
-        MouthOpen: { param: 'ParamMouthOpenY', range: [0, 1] },
-        EyeOpenLeft: { param: 'ParamEyeLOpen', range: [-1, 1] },
-        EyeLeftX: { param: null, range: null },
-      };
-    },
-  });
+  /** 页面发出去的 POST(摸头的心跳);按用例清空。 */
+  const posted: Array<{ url: string; body: string }> = [];
+  globals.fetch = async (url: string, opts?: { method?: string; body?: string }) => {
+    if (opts && opts.method === 'POST') posted.push({ url: String(url), body: String(opts.body) });
+    return {
+      json: async () => {
+        const target = String(url);
+        if (target.includes('overrides')) return { Param137: 1 };
+        if (target.includes('chat.json')) return { enabled: true, agent: false };
+        return {
+          FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
+          MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
+          MouthOpen: { param: 'ParamMouthOpenY', range: [0, 1] },
+          EyeOpenLeft: { param: 'ParamEyeLOpen', range: [-1, 1] },
+          EyeLeftX: { param: null, range: null },
+        };
+      },
+    };
+  };
   class FakeEventSource {
     onopen: (() => void) | null = null;
     onerror: (() => void) | null = null;
@@ -181,7 +188,7 @@ function stubBrowser(): {
   globals.EventSource = FakeEventSource;
 
   return {
-    written, scales, positions, nodes, stored, instances, sockets,
+    written, scales, positions, nodes, stored, instances, sockets, posted,
     fireWindow: (type: string, event: Record<string, unknown>) => {
       for (const fn of windowHandlers[type] ?? []) fn(event);
     },
@@ -328,6 +335,30 @@ describe('播放器页面', () => {
     expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800, y: 450 });
     expect(node('zoom-val').textContent).toBe('100%');
     expect(node('offset-x-val').textContent).toBe('0');
+
+    // ── 摸头:不开「拖动」,左键按在头上就是摸 ─────────────────────────────
+    stubs.posted.length = 0;
+    stubs.written.length = 0;
+    const headY = 450 - 100 * fit * 0.38;
+    node('hit').fire('pointerdown', { clientX: 800, clientY: headY, button: 0, pointerId: 2 });
+    expect(stubs.posted).toEqual([{ url: '/pat', body: '{"active":true}' }]);
+    // 摸头时头跟着手大幅转:指针推到最右,头的角度远超平时的 6 度。
+    stubs.fireWindow('pointermove', { clientX: 1600, clientY: 450 });
+    stubs.pump(8);
+    const headTurn = stubs.written.filter((entry) => entry.param === 'ParamAngleX').pop()!;
+    expect(headTurn.value).toBeGreaterThan(20);
+    node('hit').fire('pointerup', { pointerId: 2 });
+    expect(stubs.posted[stubs.posted.length - 1]).toEqual({ url: '/pat', body: '{"active":false}' });
+    // 松手后头回到平时的幅度。
+    stubs.written.length = 0;
+    stubs.pump(8);
+    const headAfter = stubs.written.filter((entry) => entry.param === 'ParamAngleX').pop()!;
+    expect(headAfter.value).toBeLessThanOrEqual(6);
+    // 打在身上不算摸头:肩上的位置不触发。
+    stubs.posted.length = 0;
+    node('hit').fire('pointerdown', { clientX: 800, clientY: 450, button: 0, pointerId: 3 });
+    expect(stubs.posted).toEqual([]);
+    node('hit').fire('pointerup', { pointerId: 3 });
 
     // ── 眼神跟随:只眼睛和一点头,身体一律不碰 ─────────────────────────────
     stubs.written.length = 0;

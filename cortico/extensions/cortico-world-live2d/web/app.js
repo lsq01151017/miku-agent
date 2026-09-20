@@ -27,6 +27,10 @@
   /** 眼神跟随的幅度:眼睛满偏,头只跟一点。 */
   var LOOK_EYE_RANGE = 1;
   var LOOK_HEAD_DEG = 6;
+  /** 摸头:按住左键在她头上。页面每两秒续一次,World 那边超时自己收。 */
+  var PAT_REFRESH_MS = 2000;
+  /** 摸头时头跟着手转的幅度(度);平时只跟一点。 */
+  var PAT_HEAD_DEG = 22;
 
   /** 底部输入区留多少条历史(收起时只看得到最近一句);字幕在她说完之后留一会儿再淡掉。 */
   var MINE_LINES = 50;
@@ -107,6 +111,9 @@
   var dragging = null;
   // 拖动是开关的:面板「更多」里按下「拖动」以后,覆层上的拖动才生效——平时点画面只是点。
   var dragArmed = false;
+  // 摸头:左键按在头上(不开「拖动」)就是摸,不是拖。
+  var patting = false;
+  var patTimer = null;
   /** 只启动一次(见 boot)。 */
   var booted = false;
   // 眼神跟随:目标来自指针位置,当前值指数逼近它。光标停住超过 LOOK_HOLD_MS,
@@ -399,8 +406,45 @@
     }
 
     // 指针全落在覆层上:画布自己不是事件目标,浏览器拖不出它的副本。
-    // 拖动要先用面板里的「拖动」开关打开,平时点画面只是点。
+    // 拖动要先用面板里的「拖动」开关打开;没开时,左键按在头上是摸头。
     var dragSurface = el.hit || el.canvas;
+
+    /** 她的头在画面上的区域:按模型此刻的尺寸估一个宽松的椭圆,她放大区域也跟着大。 */
+    function headHit(clientX, clientY) {
+      if (!model) return false;
+      var w = model.width, h = model.height; // 含缩放
+      // 模型中心 = 画面中心 + 取景偏移(view.x/y 是偏移,不是坐标)。
+      var cx = window.innerWidth / 2 + view.x;
+      var cy = window.innerHeight / 2 + view.y;
+      var dx = (clientX - cx) / (w * 0.24);
+      var dy = (clientY - (cy - h * 0.38)) / (h * 0.16);
+      return dx * dx + dy * dy <= 1;
+    }
+
+    function sendPat(active) {
+      try {
+        fetch('/pat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ active: active }),
+        }).catch(function () { /* 心跳会再试 */ });
+      } catch (e) { /* 同上 */ }
+    }
+
+    function startPat() {
+      if (patting) return;
+      patting = true;
+      sendPat(true);
+      patTimer = setInterval(function () { sendPat(true); }, PAT_REFRESH_MS);
+    }
+
+    function endPat() {
+      if (!patting) return;
+      patting = false;
+      if (patTimer) { clearInterval(patTimer); patTimer = null; }
+      sendPat(false);
+    }
+
     var setArmed = function (armed) {
       dragArmed = armed;
       if (!armed) dragging = null; // 开关关掉时若正拖着,就地停手
@@ -419,7 +463,11 @@
     if (dragSurface && dragSurface.addEventListener) {
       dragSurface.addEventListener('pointerdown', function (event) {
         if (event && event.preventDefault) event.preventDefault();
-        if (!dragArmed) return;
+        // 「拖动」没开时:左键按在头上是摸头,按在别处什么也不做。
+        if (!dragArmed) {
+          if (event.button === 0 && headHit(event.clientX, event.clientY)) startPat();
+          return;
+        }
         dragging = { x: event.clientX, y: event.clientY, fromX: view.x, fromY: view.y };
         if (dragSurface.className.indexOf('dragging') < 0) dragSurface.className += ' dragging';
         if (dragSurface.setPointerCapture) { try { dragSurface.setPointerCapture(event.pointerId); } catch (e) { /* 可选 */ } }
@@ -434,6 +482,7 @@
         applyTransform();
       });
       var release = function () {
+        endPat();
         if (!dragging) return;
         dragging = null;
         dragSurface.className = dragSurface.className.replace(' dragging', '');
@@ -445,6 +494,8 @@
       if (window.addEventListener) {
         window.addEventListener('pointerup', release);
         window.addEventListener('blur', release);
+        // 手离开窗口,摸头也就结束了(拖动不受影响:捕获还在,松手才收)。
+        window.addEventListener('pointerleave', endPat);
       }
       dragSurface.addEventListener('dragstart', function (event) {
         if (event && event.preventDefault) event.preventDefault();
@@ -707,12 +758,13 @@
         }
       } catch (e) { /* 模型没有这条参数 */ }
     });
-    // 眼神跟随:眼睛满偏,头只跟一点。不写身体参数——腰不跟着鼠标转。
+    // 眼神跟随:眼睛满偏,头只跟一点;摸头时头改成跟着手大幅转。不写身体参数——腰不跟着鼠标转。
     if (lookParams) {
+      var headDeg = patting ? PAT_HEAD_DEG : LOOK_HEAD_DEG;
       addParam(core, lookParams.eyeX, look.x * LOOK_EYE_RANGE);
       addParam(core, lookParams.eyeY, -look.y * LOOK_EYE_RANGE);
-      addParam(core, lookParams.headX, look.x * LOOK_HEAD_DEG);
-      addParam(core, lookParams.headY, -look.y * LOOK_HEAD_DEG);
+      addParam(core, lookParams.headX, look.x * headDeg);
+      addParam(core, lookParams.headY, -look.y * headDeg);
     }
     // 表情开关:先清零整组,再写当前那张的值。库的表情队列永不结束,挂过的表情会一直
     // 叠着(唱歌的开关残留,比心就显示成唱歌),所以这一层不走库,每帧自己写。

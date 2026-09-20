@@ -55,6 +55,22 @@ const CHAT_PATH = '/chat';
 const TERMINAL_CHAT_PATH = '/ws/providers/world%3Aterminal/panels/chat';
 /** 外部 Agent 的聊天入口(挂在 Agent 自己的主机上,例如 http://127.0.0.1:8790/agent/chat)。 */
 const AGENT_CHAT_PATH = '/agent/chat';
+/** 摸头的入口:页面按住左键在她头上时打这里,active 带心跳续期。 */
+const PAT_PATH = '/pat';
+/** 页面每两秒续一次摸头;超过这个间隔没续上,World 自己把摸头收掉(页面崩了也不能一直挂着)。 */
+const PAT_STALE_MS = 5_000;
+/** 摸头开始那一刻把事件递进对话;连着摸按这个冷却合并成一次,免得每一下都唤醒一轮。 */
+const PAT_EVENT_COOLDOWN_MS = 5_000;
+/**
+ * 摸头时的舒服态:闭眼(通道 -1,部署的偏移 +1 把参数落到 0)、嘴角放松、头微微迎向手。
+ * 表情层同时压成脸红(见 `resolvedExpression`),两层叠出"被摸得很舒服"的样子。
+ */
+const PAT_CHANNELS: Readonly<Record<string, number>> = {
+  EyeOpenLeft: -1,
+  EyeOpenRight: -1,
+  MouthSmile: 0.2,
+  FaceAngleZ: 4,
+};
 
 /**
  * 从 Agent 回包的一段里取出文本。
@@ -168,6 +184,12 @@ export class Live2DWorld implements World {
   private expressionTable: ReadonlyMap<string, ReadonlyArray<{ id: string; value: number }>> = new Map();
   /** 所有表情一共会写到的参数:页面每帧先清零这一组,再写当前那张的值。 */
   private expressionParams: readonly string[] = [];
+  /** 摸头进行中:表现层进舒服态,松手或心跳超时结束。 */
+  private patActive = false;
+  /** 上次收到摸头续期的时刻;超时即收。 */
+  private patLastAtMs = 0;
+  /** 上次把摸头递进对话的时刻;冷却期内不重复递。 */
+  private patEventAtMs = 0;
   private lastFrame = '';
   /** 起服务时定下来的模型入口文件名;配置问题在这一刻暴露,不留到有人打开页面。 */
   private modelFile = '';
@@ -243,8 +265,9 @@ export class Live2DWorld implements World {
     this.directive = { expression: cue, atMs: nowMs };
   }
 
-  /** 此刻该挂哪张表情:台词指令压过心情,指令过期就回到心情那张。 */
+  /** 此刻该挂哪张表情:摸头压过台词与心情,被摸时就是那张脸红享受脸。 */
   private resolvedExpression(nowMs: number): string | null {
+    if (this.patActive) return this.modelExpressions.has('blush') ? 'blush' : null;
     if (this.directive && nowMs - this.directive.atMs < this.cfg.expressionHoldMs) {
       return this.directive.expression;
     }
@@ -488,6 +511,55 @@ export class Live2DWorld implements World {
     });
   }
 
+  /**
+   * 摸头的入口:页面按住左键在她头上时打这里,`active` 带心跳续期。
+   * 坏请求体回 400,不炸服务。
+   */
+  private receivePat(req: IncomingMessage, res: ServerResponse): void {
+    let body = '';
+    req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+    req.on('end', () => {
+      try {
+        const { active } = JSON.parse(body) as { active?: unknown };
+        this.setPat(active === true, Date.now());
+        res.writeHead(204).end();
+      } catch (error) {
+        res.writeHead(400).end('bad json');
+      }
+    });
+  }
+
+  /**
+   * 摸头开关。开着时表现层进舒服态(闭眼、嘴角放松,见 `PAT_CHANNELS`),表情压成脸红。
+   * 开始那一刻把「被摸了摸头」作为内部事件递进对话——形象页只绑回环,是操作员自己的手,
+   * 所以 origin 是 internal;立即投递,她会舒服地应一声。连着摸按冷却合并成一次。
+   */
+  private setPat(active: boolean, nowMs: number): void {
+    if (active) {
+      this.patLastAtMs = nowMs;
+      if (this.patActive) return;
+      this.patActive = true;
+      this.performance?.setPat(PAT_CHANNELS);
+      if (nowMs - this.patEventAtMs >= PAT_EVENT_COOLDOWN_MS && this.host) {
+        this.patEventAtMs = nowMs;
+        void this.host.pushEvent({
+          type: 'live2d.pat',
+          source: 'live2d',
+          senderKey: 'live2d',
+          ts: new Date(nowMs).toISOString(),
+          text: '（摸了摸她的头）',
+          origin: 'internal',
+        }, { trigger: 'flush' }).catch((error) => {
+          this.host?.log.warn('摸头事件没能递进对话', { err: String(error) });
+        });
+      }
+      return;
+    }
+    if (!this.patActive) return;
+    this.patActive = false;
+    this.performance?.setPat(null);
+  }
+
   async stop(): Promise<void> {
     if (this.pushTimer) clearInterval(this.pushTimer);
     this.pushTimer = null;
@@ -623,6 +695,10 @@ export class Live2DWorld implements World {
       void this.forwardToAgent(req, res);
       return;
     }
+    if (req.method === 'POST' && url.pathname === PAT_PATH) {
+      this.receivePat(req, res);
+      return;
+    }
     if (req.method !== 'GET') {
       res.writeHead(405).end('only GET');
       return;
@@ -727,6 +803,11 @@ export class Live2DWorld implements World {
 
   private frame(): string {
     const nowMs = Date.now();
+    // 页面没了或卡死,摸头不能永远挂着:心跳超时就收。
+    if (this.patActive && nowMs - this.patLastAtMs > PAT_STALE_MS) this.setPat(false, nowMs);
+    // 先同步表情再合成通道:换挡那一刻的伴随通道(片段与通道值)要和表情名同帧,
+    // 否则第一帧挂着新表情、动着旧表情的伴随。
+    const expression = this.syncExpression(nowMs);
     // 写入顺序是契约:基线+待机+片段叠加 → 按量程裁剪(channelsAt 内) → 偏移(可越过量程,
     // 它修的是约定差) → 渲染端先写通道、再写覆盖。后一步可以修前一步,反过来不行。
     const raw = this.performance?.channelsAt(nowMs) ?? {};
@@ -736,7 +817,6 @@ export class Live2DWorld implements World {
     for (const [channel, offset] of Object.entries(this.paramOffset)) {
       channels[channel] = (channels[channel] ?? 0) + offset;
     }
-    const expression = this.syncExpression(nowMs);
     // 当前表情要写的参数值:页面每帧先清零整组开关,再写这一份。
     const expressionValues: Record<string, number> = {};
     for (const { id, value } of this.expressionTable.get(expression ?? '') ?? []) expressionValues[id] = value;

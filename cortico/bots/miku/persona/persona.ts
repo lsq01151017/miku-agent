@@ -31,6 +31,7 @@ import {
   emotionSnapshot,
   initialEmotion,
   missEffect,
+  patEffect,
   type EmotionState,
   type Mood,
   type Values,
@@ -90,6 +91,9 @@ export function isOperatorMessage(event: EventEnvelope): boolean {
   return event.origin === 'internal' && event.type === 'terminal.message';
 }
 
+/** 形象页的摸头事件:身体动作,不是话。情绪增量按当日预算走,不进词表。 */
+const PAT_EVENT_TYPE = 'live2d.pat';
+
 /** 控制台那条事件的正文:`text` 带着时间戳与名字,`meta.body` 才是他打的原话。 */
 function operatorBody(event: EventEnvelope): string | null {
   const body = (event.meta as { body?: unknown } | undefined)?.body;
@@ -114,6 +118,8 @@ export interface EmotionPolicy {
   enabled: boolean;
   maxStepPerTurn: number;
   decayScale: number;
+  /** 摸头每天最多能给多少数值(以一轮的心情增量计);0 就是摸头不给数值。 */
+  patDailyGain: number;
 }
 
 /** 前缀里要不要带工具表。端点能投递结构化 `tools` 时不需要。 */
@@ -174,7 +180,7 @@ export class Miku extends Cormini {
 
   constructor(opts: MikuOptions) {
     super(opts);
-    this.emotionPolicy = opts.emotion ?? ((): EmotionPolicy => ({ enabled: true, maxStepPerTurn: 0.3, decayScale: 1 }));
+    this.emotionPolicy = opts.emotion ?? ((): EmotionPolicy => ({ enabled: true, maxStepPerTurn: 0.3, decayScale: 1, patDailyGain: 0.25 }));
     this.toolProtocolPolicy = opts.toolProtocol ?? ((): ToolProtocolPolicy => ({ enabled: false }));
     this.memoCaps = opts.memo ?? ((): MemoCaps => ({ residentCap: 7, activeCap: 21 }));
     this.dreamPolicy = opts.dream ?? ((): DreamPolicy => ({ maxRounds: 8 }));
@@ -321,11 +327,13 @@ export class Miku extends Cormini {
   override onDelivery(ctx: { events: EventEnvelope[] }): void {
     super.onDelivery(ctx);
 
+    // 摸头是身体事件,不是话:不走词表,按当日预算给心情/活力/羁绊增量。
+    const pats = ctx.events.filter((event) => event.type === PAT_EVENT_TYPE);
     const spoken = ctx.events
       .filter((event) => event.text && (event.origin === 'external' || isOperatorMessage(event)))
       .map((event) => operatorBody(event) ?? event.text ?? '')
       .filter((text) => text !== '');
-    if (spoken.length === 0) return;
+    if (spoken.length === 0 && pats.length === 0) return;
 
     // 操作员的原话先递给表现层:「张嘴」这类吩咐是动作指令,与情绪开关无关。
     for (const event of ctx.events) {
@@ -340,14 +348,25 @@ export class Miku extends Cormini {
     const reasons = decayEmotion(this.state, Date.now(), policy.decayScale);
     // 先回落,再算久别:缺席让寂寞向上累积,是这条性格里唯一不回落的维度。
     reasons.push(...missEffect(this.state, Date.now()));
-    const { deltas, reasons: affectReasons } = analyzeAffect(spoken.join('\n'));
+    const deltas: Partial<Values> = {};
+    for (const _ of pats) {
+      const pat = patEffect(this.state, Date.now(), policy.patDailyGain);
+      reasons.push(pat.reason);
+      for (const [dimension, value] of Object.entries(pat.deltas)) {
+        deltas[dimension as keyof Values] = (deltas[dimension as keyof Values] ?? 0) + value;
+      }
+    }
+    const affect = analyzeAffect(spoken.join('\n'));
+    for (const [dimension, value] of Object.entries(affect.deltas)) {
+      deltas[dimension as keyof Values] = (deltas[dimension as keyof Values] ?? 0) + value;
+    }
     applyDeltas(this.state, deltas, reasons, policy.maxStepPerTurn);
     this.state.turns += 1;
     this.state.updatedAt = Date.now();
     this.persist();
     this.onEmotion(this.state.values, this.state.mood);
 
-    const all = [...reasons, ...affectReasons];
+    const all = [...reasons, ...affect.reasons];
     if (all.length > 0) {
       this.core?.log.debug(`[miku] 心情 ${this.state.mood}`, { reasons: all });
     }

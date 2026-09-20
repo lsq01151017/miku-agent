@@ -22,7 +22,16 @@ let modelDir = '';
 let world: Live2DWorld | null = null;
 let port = 0;
 
-const host = { log: nullLogger() } as unknown as WorldHost;
+/** World 经 host.pushEvent 递进对话的内部事件(摸头);按用例清空。 */
+const pushedEvents: Array<{ event: Record<string, unknown>; trigger?: string }> = [];
+
+const host = {
+  log: nullLogger(),
+  pushEvent: async (event: Record<string, unknown>, opts?: { trigger?: string }) => {
+    pushedEvents.push({ event, trigger: opts?.trigger });
+    return event as never;
+  },
+} as unknown as WorldHost;
 
 function config(over: Partial<Live2DConfigSection> = {}): Live2DConfigSection {
   return {
@@ -49,6 +58,7 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'live2d-'));
   webDir = join(root, 'player');
   modelDir = join(root, 'model');
+  pushedEvents.length = 0;
   mkdirSync(join(webDir, 'js'), { recursive: true });
   mkdirSync(modelDir, { recursive: true });
   for (const name of ['pixi.min.js', 'live2dcubismcore.min.js', 'cubism4.min.js']) {
@@ -598,5 +608,60 @@ describe('通道偏移与参数定值', () => {
     controller.abort();
     expect(frame.channels.EyeOpenLeft).toBe(0);
     expect(frame.channels.EyeOpenRight).toBe(1);
+  });
+});
+
+describe('摸头', () => {
+  const pat = (active: boolean) =>
+    fetch(url('/pat'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active }),
+    });
+
+  it('按住时进舒服态:表情压成脸红、眼睛闭上;松手回原样', async () => {
+    const live = await start();
+    live.setInternalState(calm, '元气');
+    const before = await firstFrame(new AbortController().signal) as
+      { expression: string | null; channels: Record<string, number> };
+    expect(before.expression).toBe('sing');
+
+    expect((await pat(true)).status).toBe(204);
+    const during = await firstFrame(new AbortController().signal) as typeof before;
+    expect(during.expression).toBe('blush');
+    // 通道 -1:部署的偏移 +1 把参数落到 0,眼睛闭上。
+    expect(during.channels.EyeOpenLeft).toBe(-1);
+    expect(during.channels.EyeOpenRight).toBe(-1);
+
+    await pat(false);
+    const after = await firstFrame(new AbortController().signal) as typeof before;
+    expect(after.expression).toBe('sing');
+    expect(after.channels.EyeOpenLeft).not.toBe(-1);
+  });
+
+  it('开始那一刻把「被摸了摸头」递进对话,连着摸按冷却合并成一次', async () => {
+    await start();
+    await pat(true);
+    await pat(false);
+    // 冷却期内再摸:事件不重复递。
+    await pat(true);
+    expect(pushedEvents).toHaveLength(1);
+    expect(pushedEvents[0]!.event).toMatchObject({
+      type: 'live2d.pat',
+      source: 'live2d',
+      origin: 'internal',
+      text: '（摸了摸她的头）',
+    });
+    expect(pushedEvents[0]!.trigger).toBe('flush');
+    await pat(false);
+  });
+
+  it('坏请求体回 400,不炸服务', async () => {
+    await start();
+    const res = await fetch(url('/pat'), { method: 'POST', body: 'not json' });
+    expect(res.status).toBe(400);
+    // 服务还活着:下一帧照常。
+    const frame = await firstFrame(new AbortController().signal) as { clients: number };
+    expect(frame.clients).toBeGreaterThanOrEqual(1);
   });
 });

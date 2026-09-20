@@ -85,6 +85,8 @@ export class Performance {
   private lastSpokeAtMs = Number.NEGATIVE_INFINITY;
   /** 表情的伴随通道值;跟着表情的寿命走,由 `setStaging` 替换。 */
   private staging: ChannelValues = {};
+  /** 摸头的伴随通道值;摸头期间一直叠在合成里,由 `setPat` 开关。 */
+  private pat: ChannelValues = {};
 
   constructor(private readonly pack: Pack, opts: Partial<PerformanceOptions> = {}) {
     this.opts = { ...PERFORMANCE_DEFAULTS, ...opts };
@@ -108,6 +110,14 @@ export class Performance {
    */
   setStaging(channels: ChannelValues | null): void {
     this.staging = channels === null ? {} : { ...channels };
+  }
+
+  /**
+   * 摸头的伴随通道值:闭眼、嘴角放松这一层舒服态,摸头期间一直叠在合成里。
+   * 与表情伴随同形,但寿命跟着摸头走,不跟表情换挡。
+   */
+  setPat(channels: ChannelValues | null): void {
+    this.pat = channels === null ? {} : { ...channels };
   }
 
   activeClips(nowMs: number): ActiveClip[] {
@@ -227,7 +237,7 @@ export class Performance {
     };
   }
 
-  /** 此刻的通道值:基线 + 待机动作 + 活动片段 + 表情伴随,按量程裁剪。顺带清掉已经结束的片段。 */
+  /** 此刻的通道值:基线 + 待机动作 + 活动片段 + 表情伴随 + 摸头,按量程裁剪。顺带清掉已经结束的片段。 */
   channelsAt(nowMs: number): ChannelValues {
     this.prune(nowMs);
     const out: ChannelValues = { ...this.baseline };
@@ -235,6 +245,9 @@ export class Performance {
       out[channel] = (out[channel] ?? 0) + value;
     }
     for (const [channel, value] of Object.entries(this.staging)) {
+      out[channel] = (out[channel] ?? 0) + value;
+    }
+    for (const [channel, value] of Object.entries(this.pat)) {
       out[channel] = (out[channel] ?? 0) + value;
     }
     for (const clip of this.active) {

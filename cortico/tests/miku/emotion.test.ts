@@ -11,6 +11,7 @@ import {
   initialEmotion,
   missEffect,
   moodOf,
+  patEffect,
 } from '../../bots/miku/persona/emotion.ts';
 
 describe('moodOf', () => {
@@ -142,5 +143,53 @@ describe('missEffect', () => {
 
   it('重逢的话会安抚寂寞', () => {
     expect(analyzeAffect('我回来啦,好想你').deltas.loneliness ?? 0).toBeLessThan(0);
+  });
+});
+
+describe('patEffect', () => {
+  it('一轮给心情/活力/羁绊增量,并记入当日预算', () => {
+    const state = initialEmotion();
+    const { deltas, reason } = patEffect(state, Date.now(), 0.25);
+    expect(deltas.valence).toBeCloseTo(0.05, 5);
+    expect(deltas.arousal).toBeCloseTo(0.03, 5);
+    expect(deltas.bond).toBeCloseTo(0.06, 5);
+    expect(reason).toContain('被摸了摸头');
+    expect(state.patGain).toBeCloseTo(0.05, 5);
+  });
+
+  it('当日预算用尽就不再给数值,只报原因', () => {
+    const state = initialEmotion();
+    const now = Date.now();
+    for (let i = 0; i < 5; i++) patEffect(state, now, 0.25);
+    const { deltas, reason } = patEffect(state, now, 0.25);
+    expect(Object.keys(deltas)).toEqual([]);
+    expect(reason).toContain('上限');
+  });
+
+  it('余额不足按比例给,不越过预算', () => {
+    const state = initialEmotion();
+    const now = Date.now();
+    patEffect(state, now, 0.12);
+    patEffect(state, now, 0.12);
+    // 预算 0.12,已得 0.10,只够再给 0.02:按 40% 计,恰好补齐。
+    const third = patEffect(state, now, 0.12);
+    expect(third.deltas.valence).toBeCloseTo(0.02, 5);
+    expect(state.patGain).toBeCloseTo(0.12, 5);
+    expect(Object.keys(patEffect(state, now, 0.12).deltas)).toEqual([]);
+  });
+
+  it('日期一翻,预算重新开始', () => {
+    const state = initialEmotion();
+    const now = Date.now();
+    for (let i = 0; i < 5; i++) patEffect(state, now, 0.25);
+    expect(Object.keys(patEffect(state, now, 0.25).deltas)).toEqual([]);
+    const { deltas } = patEffect(state, now + 24 * 3_600_000, 0.25);
+    expect(deltas.valence).toBeCloseTo(0.05, 5);
+  });
+
+  it('预算写 0 就是摸头只舒服、不给数值', () => {
+    const state = initialEmotion();
+    const { deltas } = patEffect(state, Date.now(), 0);
+    expect(Object.keys(deltas)).toEqual([]);
   });
 });

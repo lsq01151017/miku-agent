@@ -47,6 +47,16 @@ export const MIKU_EMOTION_CONFIG_GROUP: ConfigGroup = {
         'x-hot': true,
         description: '各维度自带的回落半衰期乘以它。1 = 用维度自己的半衰期;越大回落越快。',
       },
+      'emotion.patDailyGain': {
+        type: 'number',
+        title: '摸头每日数值上限',
+        minimum: 0,
+        maximum: 1,
+        multipleOf: 0.05,
+        'x-hot': true,
+        description:
+          '每天靠摸头最多能把心情抬多少(活力与羁绊按同一比例给)。写 0 就是摸头只舒服、不给数值。',
+      },
     },
   },
 };
