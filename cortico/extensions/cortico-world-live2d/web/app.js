@@ -91,7 +91,7 @@
     composerInput: document.getElementById('composer-input'),
     history: document.getElementById('btn-history'),
     tray: document.getElementById('tray'),
-    dialogBar: document.getElementById('dialog-bar'),
+    dialogRow: document.getElementById('dialog-row'),
     ctx: document.getElementById('ctx'),
     ctxFill: document.getElementById('ctx-fill'),
     ctxNum: document.getElementById('ctx-num'),
@@ -298,9 +298,9 @@
         }
         el.composer.className = 'glass';
         if (!useAgent) openChat();
-        // 读数与开关都走控制台:没配控制台,那一栏整个不出现。
-        if (info.console && el.dialogBar) {
-          el.dialogBar.className = 'on';
+        // 走控制台的那三样(用量/模型/权限)没配控制台就不出现;附图与历史、发送不依赖控制台。
+        if (info.console && el.dialogRow) {
+          el.dialogRow.className = 'on';
           bindDialogBar();
         }
       })
@@ -637,12 +637,14 @@
     return String(Math.round(n));
   }
 
-  /** 运行开关的牌子;真值没到过之前只占位,不动作。 */
+  /** 权限按钮(运行开关);真值没到过之前只占位,不动作。 */
   function renderRunChip() {
     if (!el.btnRun) return;
-    el.btnRun.textContent = runPaused === null ? '运行 —' : (runPaused ? '已暂停' : '运行中');
-    el.btnRun.className = 'chip' + (runPaused === true ? ' paused' : '');
-    el.btnRun.title = runPaused === null ? '等状态读数' : (runPaused ? '她停着;点一下继续' : '点一下暂停她');
+    el.btnRun.textContent = runPaused === null ? '权限 —' : (runPaused ? '权限·已暂停' : '权限·运行中');
+    el.btnRun.className = runPaused === true ? 'paused' : '';
+    el.btnRun.title = runPaused === null
+      ? '权限:等状态读数'
+      : (runPaused ? '权限:她停着;点一下继续' : '权限:点一下暂停她');
   }
 
   /** 状态帧 → 读数行:用量条按预算画,过软预警线变黄、满变红;运行牌子照帧里的画。 */
@@ -762,7 +764,7 @@
       providerList.instances.forEach(function (instance) {
         if (instance.name === active) hit = instance;
       });
-      el.btnModel.textContent = '模型 ' + (hit ? (hit.model || hit.name) : (active || '—'));
+      el.btnModel.textContent = '模型·' + (hit ? (hit.model || hit.name) : (active || '—'));
       el.btnModel.title = hit
         ? '当前:' + hit.name + (hit.model ? ' · ' + hit.model : '')
         : '换她跑在哪个模型上';

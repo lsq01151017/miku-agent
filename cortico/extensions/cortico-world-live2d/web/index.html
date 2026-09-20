@@ -116,9 +116,9 @@
   #composer.expanded #mine { max-height: 30vh; overflow-y: auto; padding-bottom: 6px; }
   #mine div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #composer:not(.expanded) #mine div:not(:last-child) { display: none; }
-  #composer form { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+  #composer form { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
   #composer input {
-    flex: 1; min-width: 0; padding: 8px 12px; border-radius: 8px;
+    width: 100%; box-sizing: border-box; padding: 8px 12px; border-radius: 8px;
     border: 2px solid var(--pop-edge); background: #ffffff;
     color: var(--pop-ink); font: 14px/1.4 system-ui, "Microsoft YaHei", sans-serif;
   }
@@ -127,16 +127,35 @@
     outline: none; background: var(--pop-cyan-soft);
     box-shadow: 3px 3px 0 rgba(15, 176, 191, 0.55);
   }
-  /* 「历史」是文字按钮:下划线式,不占一块牌子。 */
-  #btn-history {
-    padding: 4px 8px; border: 0; border-bottom: 2px solid rgba(10, 14, 26, 0.35); border-radius: 0;
-    background: transparent; box-shadow: none; color: var(--pop-dim); font-size: 11px; font-weight: 600;
-  }
-  #btn-history:hover { background: transparent; color: var(--pop-steel); border-bottom-color: var(--pop-steel); }
 
-  /* 附图钮:与「说」同一块牌子的语言,只是小一号、放一张图。 */
-  #btn-attach { padding: 6px 9px; flex: none; }
-  #btn-attach svg { display: block; width: 16px; height: 16px; }
+  /* 按钮行:四件套(附图/用量/模型/权限)与历史、发送同住一行,牌子小一号。 */
+  #dialog-row { display: flex; align-items: center; gap: 6px; }
+  #dialog-row .grow { flex: 1; }
+  #dialog-row button {
+    padding: 4px 10px; font-size: 12px; line-height: 1.4;
+    box-shadow: 2px 2px 0 rgba(10, 14, 26, 0.85);
+  }
+  #dialog-row button:active { transform: translate(2px, 2px); }
+  #btn-attach { flex: none; }
+  #btn-attach svg { display: block; width: 15px; height: 15px; }
+  #btn-model {
+    max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* 没配控制台时,走控制台的那三样(用量/模型/权限)整块不出现。 */
+  #dialog-row #ctx, #dialog-row #btn-model, #dialog-row #btn-run { display: none; }
+  #dialog-row.on #ctx { display: inline-flex; }
+  #dialog-row.on #btn-model, #dialog-row.on #btn-run { display: inline-block; }
+  #ctx { align-items: center; gap: 6px; min-width: 0; padding: 0 2px; }
+  #ctx-bar {
+    flex: none; width: 64px; height: 8px; overflow: hidden;
+    border: 2px solid var(--pop-edge); background: #ffffff;
+  }
+  #ctx-fill { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #0fa3b1, #14b8c6); }
+  #ctx.warn #ctx-fill { background: #d99a06; }
+  #ctx.danger #ctx-fill { background: #c0392b; }
+  #ctx-num { font: 700 11px/1.6 ui-monospace, monospace; color: var(--pop-ink); white-space: nowrap; }
+  #btn-run.paused { color: #a3471f; border-color: #a3471f; }
+
   /* 拖图进输入区:墨线换成虚线,松手或拖出复原。 */
   #composer.dragover { border-style: dashed; }
   /* 图托盘:缩略图带墨线与小硬投影,右上角一枚移除钮。 */
@@ -157,33 +176,7 @@
   #tray .thumb button:hover { background: #c0392b; }
   #tray .thumb button:active { transform: none; box-shadow: none; }
 
-  /* 读数行:她的上下文用量、运行开关、模型选择;没配控制台时整行不出现。 */
-  #dialog-bar {
-    display: none; align-items: center; gap: 10px; margin-top: 6px; padding: 0 4px;
-    font: 600 11px/1.6 system-ui, "Microsoft YaHei", sans-serif; color: var(--pop-dim);
-  }
-  #dialog-bar.on { display: flex; }
-  #dialog-bar .grow { flex: 1; }
-  #ctx { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
-  #ctx-bar {
-    flex: none; width: 64px; height: 8px; overflow: hidden;
-    border: 2px solid var(--pop-edge); background: #ffffff;
-  }
-  #ctx-fill { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #0fa3b1, #14b8c6); }
-  #ctx.warn #ctx-fill { background: #d99a06; }
-  #ctx.danger #ctx-fill { background: #c0392b; }
-  #ctx-num { font: 700 11px/1.6 ui-monospace, monospace; color: var(--pop-ink); white-space: nowrap; }
-  .chip {
-    padding: 2px 6px; border: 0; border-bottom: 2px solid rgba(10, 14, 26, 0.35); border-radius: 0;
-    background: transparent; box-shadow: none; color: var(--pop-dim);
-    font: 600 11px/1.6 system-ui, "Microsoft YaHei", sans-serif;
-    max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  }
-  .chip:hover { background: transparent; color: var(--pop-steel); border-bottom-color: var(--pop-steel); }
-  .chip:active { transform: none; box-shadow: none; }
-  #btn-run.paused { color: #a3471f; border-bottom-color: #a3471f; }
-
-  /* 模型选择器的弹出单:从读数行向上弹,同一套白玻璃。 */
+  /* 模型选择器的弹出单:从按钮行向上弹,同一套白玻璃。 */
   #model-pop {
     display: none; position: absolute; right: 10px; bottom: calc(100% + 8px);
     width: min(320px, calc(100vw - 40px)); max-height: 42vh; overflow-y: auto; padding: 8px;
@@ -265,24 +258,24 @@
 <div id="composer" class="glass hidden">
   <div id="mine"></div>
   <div id="tray"></div>
-  <div id="dialog-bar">
-    <span id="ctx" title="她的上下文用量"><span id="ctx-bar"><i id="ctx-fill"></i></span><b id="ctx-num">—</b></span>
-    <span class="grow"></span>
-    <button id="btn-run" type="button" class="chip" title="等状态读数">运行 —</button>
-    <button id="btn-model" type="button" class="chip" title="换她跑在哪个模型上">模型 —</button>
-  </div>
   <form id="composer-form" autocomplete="off">
-    <button id="btn-attach" type="button" title="附图(也可拖入或粘贴)" aria-label="附图">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/>
-        <circle cx="8.5" cy="9" r="1.6"/>
-        <path d="m4 17.5 5-4.5 3.5 3 3-2.5 4.5 4"/>
-      </svg>
-    </button>
     <input id="composer-input" type="text" placeholder="对她说点什么…" aria-label="对她说点什么">
-    <button id="btn-history" type="button" title="展开我发过的话">历史</button>
-    <button type="submit">说</button>
+    <div id="dialog-row">
+      <button id="btn-attach" type="button" title="附图(也可拖入或粘贴)" aria-label="附图">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/>
+          <circle cx="8.5" cy="9" r="1.6"/>
+          <path d="m4 17.5 5-4.5 3.5 3 3-2.5 4.5 4"/>
+        </svg>
+      </button>
+      <span id="ctx" title="她的上下文用量"><span id="ctx-bar"><i id="ctx-fill"></i></span><b id="ctx-num">—</b></span>
+      <span class="grow"></span>
+      <button id="btn-history" type="button" title="展开我发过的话">历史</button>
+      <button id="btn-model" type="button" title="换她跑在哪个模型上">模型 —</button>
+      <button id="btn-run" type="button" title="等状态读数">权限 —</button>
+      <button type="submit">说</button>
+    </div>
   </form>
   <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>
   <div id="model-pop" class="glass"></div>

@@ -566,8 +566,8 @@ describe('播放器页面', () => {
     send({ channels: {}, speaking: false, page: 'ff00ff00' });
     expect(stubs.reloads).toHaveLength(1);   // 不一致:这份页面是旧的,刷新成新的
 
-    // ── 对话框读数行:状态帧里的用量与运行态照实画 ──────────────────────────
-    expect(node('dialog-bar').className).toBe('on');   // 配了控制台,读数行出现
+    // ── 对话框按钮行:四件套都在输入区里,状态帧里的用量与运行态照实画 ────────
+    expect(node('dialog-row').className).toBe('on');   // 配了控制台,用量/模型/权限出现
     send({
       channels: {}, speaking: false,
       status: { estTokens: 120000, messageCount: 30, paused: false, maxTokens: 240000, softRatio: 0.85, hardTokens: 130000 },
@@ -575,26 +575,26 @@ describe('播放器页面', () => {
     expect(node('ctx-num').textContent).toBe('120.0k/240.0k');
     expect(node('ctx-fill').style.width).toBe('50.0%');
     expect(node('ctx').className).toBe('');
-    expect(node('btn-run').textContent).toBe('运行中');
+    expect(node('btn-run').textContent).toBe('权限·运行中');
     // 过软预警线变黄,满过预算变红;暂停态照帧里画。
     send({ channels: {}, speaking: false, status: { estTokens: 210000, paused: false, maxTokens: 240000, softRatio: 0.85 } });
     expect(node('ctx').className).toBe('warn');
     send({ channels: {}, speaking: false, status: { estTokens: 250000, paused: true, maxTokens: 240000, softRatio: 0.85 } });
     expect(node('ctx').className).toBe('danger');
-    expect(node('btn-run').textContent).toBe('已暂停');
+    expect(node('btn-run').textContent).toBe('权限·已暂停');
     expect(node('btn-run').className).toContain('paused');
 
-    // 运行开关:按当前态往反方向扳,POST /dialog/run。
+    // 权限按钮:按当前态往反方向扳,POST /dialog/run。
     node('btn-run').fire('click');
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(stubs.posted.some((p) => p.url === '/dialog/run' && p.body.includes('"action":"resume"'))).toBe(true);
-    expect(node('btn-run').textContent).toBe('运行中');   // 先照新值画,下一帧自然对齐
+    expect(node('btn-run').textContent).toBe('权限·运行中');   // 先照新值画,下一帧自然对齐
 
     // ── 模型选择器:清单、激活点、实例内换名 ────────────────────────────────
     node('btn-model').fire('click');
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(node('model-pop').className).toContain('on');
-    expect(node('btn-model').textContent).toBe('模型 miku-x');
+    expect(node('btn-model').textContent).toBe('模型·miku-x');
     const rows = node('model-pop').children.filter((child) => child.className.indexOf('mrow') >= 0);
     expect(rows.length).toBe(2);
     expect(rows[0]!.className).toContain('active');       // deepseek 是激活端点
@@ -609,7 +609,7 @@ describe('播放器页面', () => {
     subs[1]!.fire('click');
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(stubs.posted.some((p) => p.url === '/dialog/model' && p.body.includes('"model":"miku-y"'))).toBe(true);
-    expect(node('btn-model').textContent).toBe('模型 miku-y');
+    expect(node('btn-model').textContent).toBe('模型·miku-y');
     // 点到弹出单外面:收起。
     stubs.fireDocument('pointerdown', { target: {} });
     expect(node('model-pop').className).not.toContain('on');
