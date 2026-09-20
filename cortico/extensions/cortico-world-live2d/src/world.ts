@@ -16,6 +16,7 @@
  * 口型是按说话时长跑的振荡,不是音频同步:没有语音合成就没有音素时间轴。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, isAbsolute, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -43,6 +44,23 @@ import { LIVE2D_CONFIG_GROUP, type Live2DConfigSection } from './config.ts';
 const WEB_DIR = fileURLToPath(new URL('../web/', import.meta.url));
 /** 环境提示词随包走,不在工作区里。 */
 const ENV_PROMPT_FILE = fileURLToPath(new URL('../ENV_PROMPT.md', import.meta.url));
+
+/**
+ * 页面版本:入口与页面脚本的(大小, mtime)摘要。注入进页面、随每帧下发;页面拿它与自己的
+ * 版本比对,不符即自刷新——换装后挂着的旧标签页在重连后自己换成新页面,不再依赖操作员
+ * 记得刷新。文件没动过的重启版本不变,连着的页面不会白刷。
+ */
+function pageVersionOf(dir: string): string {
+  const parts = ['index.html', 'app.js'].map((name) => {
+    try {
+      const stat = statSync(join(dir, name));
+      return `${name}:${stat.size}-${Math.trunc(stat.mtimeMs)}`;
+    } catch {
+      return `${name}:missing`;
+    }
+  });
+  return createHash('sha1').update(parts.join('|')).digest('hex').slice(0, 8);
+}
 /** 推流间隔。60ms 比 60fps 略慢:画面里的平滑在浏览器侧做,这里不必更密。 */
 const PUSH_INTERVAL_MS = 60;
 const KEEPALIVE_MS = 15_000;
@@ -146,6 +164,8 @@ export class Live2DWorld implements World {
 
   private readonly cfg: Live2DConfigSection;
   private readonly packageDir: string;
+  /** 页面版本(见 `pageVersionOf`):注入页面、随帧下发,页面据此自刷新。 */
+  private readonly pageVersion: string;
   private host: WorldHost | null = null;
   private pack: Pack | null = null;
   private performance: Performance | null = null;
@@ -214,6 +234,8 @@ export class Live2DWorld implements World {
         throw new Error(`${what}不在扩展包里(${file});package.json 的 files 要包含 web/ 与 ENV_PROMPT.md`);
       }
     }
+    // 页面版本在资产检查之后算:那两份文件此时确定都在。
+    this.pageVersion = pageVersionOf(WEB_DIR);
   }
 
   /**
@@ -754,10 +776,15 @@ export class Live2DWorld implements World {
     }
   }
 
-  /** 页面只注入一个模型文件名;其余都在 `/app.js` 里。 */
+  /** 页面注入模型文件名与页面版本;其余都在 `/app.js` 里。 */
   private sendPage(res: ServerResponse): void {
     const html = readFileSync(join(WEB_DIR, 'index.html'), 'utf8')
-      .replace('</head>', `<script>window.${MODEL_FILE_GLOBAL} = ${JSON.stringify(this.modelFile)};</script>\n</head>`);
+      .replace(
+        '</head>',
+        `<script>window.${MODEL_FILE_GLOBAL} = ${JSON.stringify(this.modelFile)};`
+          + `window.__DSH_PAGE_VER__ = ${JSON.stringify(this.pageVersion)};`
+          + `document.title += ' · ' + window.__DSH_PAGE_VER__;</script>\n</head>`,
+      );
     // 页面保持 no-store:入口永远现读现发,不会拿旧的 index.html 去配新的 app.js。
     res.writeHead(200, { 'Content-Type': CONTENT_TYPES['.html']!, 'Cache-Control': 'no-store' }).end(html);
   }
@@ -840,6 +867,8 @@ export class Live2DWorld implements World {
       mood: this.mood,
       clips: this.performance?.activeClips(nowMs).map((clip) => clip.clipId) ?? [],
       clients: this.clients.size,
+      // 页面版本:连着的旧页面比对后自刷新。放在帧尾,老页面的解析不受影响。
+      page: this.pageVersion,
     });
   }
 

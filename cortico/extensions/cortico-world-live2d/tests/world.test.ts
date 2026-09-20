@@ -128,6 +128,15 @@ describe('静态路由', () => {
     expect(await (await fetch(url('/app.js'))).text()).toContain('EventSource');
   });
 
+  it('入口注入的页面版本与帧里带的一致,页面据此自刷新', async () => {
+    await start();
+    const page = await (await fetch(url('/'))).text();
+    const injected = /window\.__DSH_PAGE_VER__ = "([0-9a-f]+)"/.exec(page);
+    expect(injected).toBeTruthy();
+    const frame = await firstFrame(new AbortController().signal) as { page: string };
+    expect(frame.page).toBe(injected![1]);
+  });
+
   it('静态文件带 ETag:未改动回 304,ETag 不匹配照发全文', async () => {
     await start();
     const first = await fetch(url('/app.js'));

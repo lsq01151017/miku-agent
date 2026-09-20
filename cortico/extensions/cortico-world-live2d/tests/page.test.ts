@@ -40,6 +40,8 @@ function stubBrowser(): {
   sockets: Array<{ url: string; sent: string[]; readyState: number; fire: (data: string) => void }>;
   /** 页面发出去的 POST(摸头的心跳)。 */
   posted: Array<{ url: string; body: string }>;
+  /** 页面自刷新的次数:帧里的版本与入口注入的不符时刷新。 */
+  reloads: number[];
   /** 摸头识别区的锚点网格范围(画布像素);挪动它即挪动模型的头。 */
   headBounds: { x: number; y: number; width: number; height: number };
   /** 触发 window 上的事件(页面用它接指针)。 */
@@ -149,8 +151,9 @@ function stubBrowser(): {
       getItem: () => null,
       setItem: (_key: string, value: string) => { stored.push(value); },
     },
-    location: { protocol: 'http:', host: '127.0.0.1:18795' },
+    location: { protocol: 'http:', host: '127.0.0.1:18795', reload: () => { reloads.push(1); } },
     __DSH_MODEL_FILE__: 'miku.model3.json',
+    __DSH_PAGE_VER__: 'aa11bb22',
   };
   // 假 WebSocket:记下页面发出去的东西,并让测试能装作她回了话。
   globals.WebSocket = class {
@@ -176,8 +179,9 @@ function stubBrowser(): {
     Application: class { renderer = { resize: () => {} }; stage = { addChild: () => {} }; },
     live2d: { Live2DModel: { from: async () => model } },
   };
-  /** 页面发出去的 POST(摸头的心跳);按用例清空。 */
   const posted: Array<{ url: string; body: string }> = [];
+  /** 页面自刷新的次数:帧里的版本与入口注入的不符时刷新。 */
+  const reloads: number[] = [];
   globals.fetch = async (url: string, opts?: { method?: string; body?: string }) => {
     if (opts && opts.method === 'POST') posted.push({ url: String(url), body: String(opts.body) });
     return {
@@ -205,7 +209,7 @@ function stubBrowser(): {
   globals.EventSource = FakeEventSource;
 
   return {
-    written, scales, positions, nodes, stored, instances, sockets, posted, headBounds,
+    written, scales, positions, nodes, stored, instances, sockets, posted, reloads, headBounds,
     fireWindow: (type: string, event: Record<string, unknown>) => {
       for (const fn of windowHandlers[type] ?? []) fn(event);
     },
@@ -510,5 +514,12 @@ describe('播放器页面', () => {
     expect(node('expression').textContent).toBe('heart');
     expect(node('speaking').textContent).toBe('否');
     expect(node('clips').textContent).toBe('—');
+
+    // ── 页面版本:帧里带的不符即自刷新,相符不动 ─────────────────────────────
+    expect(stubs.reloads).toHaveLength(0);   // 前面那些帧都没带版本,不刷
+    send({ channels: {}, speaking: false, page: 'aa11bb22' });
+    expect(stubs.reloads).toHaveLength(0);   // 与入口注入的一致:不刷
+    send({ channels: {}, speaking: false, page: 'ff00ff00' });
+    expect(stubs.reloads).toHaveLength(1);   // 不一致:这份页面是旧的,刷新成新的
   });
 });

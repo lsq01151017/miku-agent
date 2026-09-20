@@ -9,6 +9,8 @@
  * 说成"唇形同步"是撒谎。说话一停它就回到基线。
  *
  * 缩放、位置、复位是给人用的取景工具:存下来的取景只影响画面,不回写模型,也不进 World。
+ *
+ * 页面版本随帧下发:与入口注入的不符就自刷新,挂着没刷新的旧标签页重连后自己换成新页面。
  */
 (function () {
   'use strict';
@@ -142,6 +144,9 @@
   var barFill = {};
   var barNum = {};
   var channelRows = {};
+  // 页面版本(World 注入在入口里,入口与页面脚本的摘要)。帧里带的版本与它不符,说明这份
+  // 页面是旧的:刷新成新的——换过页面之后挂着的旧标签页,重连后自己换装,不必记得手动刷新。
+  var pageVersion = String(window.__DSH_PAGE_VER__ || '');
 
   function loadView() {
     try {
@@ -760,11 +765,11 @@
   }
 
   /**
-   * 每帧写一次参数:通道值 + 眼神跟随 + 表情开关 + 参数定值。
+   * 每帧写一次参数:通道值 + 口型 + 眼神跟随 + 表情开关 + 参数定值。
    *
-   * 写入顺序是契约:通道(赋值;眨眼与口型走加法) → 眼神跟随(加法) → 表情开关(先清零
-   * 整组,再写当前那张的值) → 参数定值(赋值,最后写,只赢它点名的参数)。后一步可以叠加
-   * 或覆盖前一步,反过来不行。
+   * 写入顺序是契约:通道与口型(眨眼组走加法,其余赋值) → 眼神跟随(加法) → 表情开关(先
+   * 清零整组,再写当前那张的值) → 参数定值(赋值,最后写,只赢它点名的参数)。后一步可以
+   * 叠加或覆盖前一步,反过来不行。
    *
    * 模型没有的参数(缺件)静默跳过,那正是 `losesIfMissing` 说的。眨眼参数与眼神跟随走加法
    * (叠加在通道值上),其余走赋值。
@@ -781,21 +786,21 @@
     Object.keys(current).forEach(function (channel) {
       var param = channelParam[channel];
       if (!param) return;
-      // 口型:说话时是自己的振荡,不说话时听 World 的(片段能让她「张嘴」);两者取大的那个,
-      // 所以说话当中被要求张嘴也看得出来。
-      var value = channel === 'MouthOpen'
-        ? Math.max(mouthOpen, typeof current[channel] === 'number' ? current[channel] : 0)
-        : current[channel];
+      var value = current[channel];
       var range = channelRange[channel];
       if (range) value = Math.min(range[1], Math.max(range[0], value));
-      try {
-        if (blinkParams[param]) {
-          core.setParameterValueById(param, core.getParameterValueById(param) + value);
-        } else {
-          core.setParameterValueById(param, value);
-        }
-      } catch (e) { /* 模型没有这条参数 */ }
+      writeParam(core, param, value);
     });
+    // 口型单独写:说话时是自己的振荡,不说话时听 World 的(片段能让她「张嘴」),两者取大的
+    // 那个,所以说话当中被要求张嘴也看得出来。不平滑也不走 current——tick 把 MouthOpen 摘出
+    // 平滑就是为了让它每帧直取帧值:片段的包络自带起落,再平滑一遍会把「张嘴」的峰值磨掉。
+    var mouthParam = channelParam.MouthOpen;
+    if (mouthParam) {
+      var mouthValue = Math.max(mouthOpen, typeof target.MouthOpen === 'number' ? target.MouthOpen : 0);
+      var mouthRange = channelRange.MouthOpen;
+      if (mouthRange) mouthValue = Math.min(mouthRange[1], Math.max(mouthRange[0], mouthValue));
+      writeParam(core, mouthParam, mouthValue);
+    }
     // 眼神跟随:眼睛满偏,头只跟一点;摸头时头改成跟着手大幅转。不写身体参数——腰不跟着鼠标转。
     if (lookParams) {
       var headDeg = patting ? PAT_HEAD_DEG : LOOK_HEAD_DEG;
@@ -819,6 +824,20 @@
     Object.keys(overrides).forEach(function (param) {
       try { core.setParameterValueById(param, overrides[param]); } catch (e) { /* 同上 */ }
     });
+  }
+
+  /**
+   * 写一条通道值:眨眼组的参数走加法(开合归眨眼逻辑,通道只在它上面叠加),其余定值。
+   * 模型没有这条参数就跳过。
+   */
+  function writeParam(core, param, value) {
+    try {
+      if (blinkParams[param]) {
+        core.setParameterValueById(param, core.getParameterValueById(param) + value);
+      } else {
+        core.setParameterValueById(param, value);
+      }
+    } catch (e) { /* 模型没有这条参数 */ }
   }
 
   /** 在模型当前值上叠加一个偏移;模型没有这条参数就跳过。 */
@@ -850,7 +869,7 @@
     look.y += (look.targetY - look.y) * ease;
 
     Object.keys(target).forEach(function (channel) {
-      if (channel === 'MouthOpen') return; // 口型归说话,不跟通道
+      if (channel === 'MouthOpen') return; // 口型不平滑:每帧直取帧值(见 writeFrame)
       var to = target[channel];
       var from = current[channel] === undefined ? 0 : current[channel];
       current[channel] = from + (to - from) * 0.18;
@@ -873,6 +892,11 @@
     };
     source.onmessage = function (event) {
       var payload = JSON.parse(event.data);
+      // 帧里的页面版本与入口注入的不符:这份页面是旧的,刷新成新的。文件没动过的重启版本不变,不会白刷。
+      if (typeof payload.page === 'string' && payload.page !== pageVersion) {
+        window.location.reload();
+        return;
+      }
       target = payload.channels || {};
       expressionParams = payload.expressionParams || null;
       expressionValues = payload.expressionValues || null;
