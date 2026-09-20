@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EMOTION_BASELINE, baselineChannels } from '../src/baseline.ts';
+import { cueExpression } from '../src/directives.ts';
 import { loadPack } from '../src/pack.ts';
 import { Performance } from '../src/performance.ts';
 
@@ -39,8 +40,20 @@ describe('素材包读取', () => {
     expect(pack.missingStagingClipIds).toEqual([]);
     expect(pack.unknownStagingChannels).toEqual([]);
     // 表情只写开关参数、不改五官,伴随通道值才是"看得出来"的那一半。
-    expect(pack.staging.blush!.channels!.MouthSmile).toBeGreaterThan(0);
-    expect(pack.staging.heart!.channels!.MouthSmile).toBeGreaterThan(0);
+    // 指令表里的每个表情都该有:脸红的贴图只有 0.58 不透明度,没有通道值几乎看不见。
+    for (const cue of pack.cues) {
+      expect(pack.staging[cue.expression]?.channels, cue.expression).toBeDefined();
+    }
+  });
+
+  it('口头禅不偷表情:句尾的♪是语气不是唱歌,说葱挂葱', () => {
+    const pack = loadPack(PACK_DIR);
+    // 她的句尾习惯是♪。它曾在 sing 的词表里、又排在 leek 之前,
+    // 把「葱」「温柔」这些指令几乎全部偷成了唱歌。
+    expect(cueExpression(pack.cues, '今天也要精神满满地过呀♪')).toBeNull();
+    expect(cueExpression(pack.cues, '葱——！早上就吃这个吗？配着晨光咬下去，咔嚓。')).toBe('leek');
+    expect(cueExpression(pack.cues, '温柔地陪着你')).toBe('lean');
+    expect(cueExpression(pack.cues, '那我给你唱一小段吧')).toBe('sing');
   });
 });
 

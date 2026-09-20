@@ -1,9 +1,9 @@
 {
-  "_note": "台词 → 模型自带表情的指令表。expression 必须是 model3.json 的 Expressions 里有的名字；words 命中即挂，长词优先，同一段话里同一条只触发一次。水印不是表演，不在这里。staging 是表情 → 伴随片段：表情挂上的那一刻播一次，让常用表情带上身体动作；片段名必须在 clips.json 里。",
+  "_note": "台词 → 模型自带表情的指令表。expression 必须是 model3.json 的 Expressions 里有的名字；words 命中即挂，长词优先，同一段话里同一条只触发一次。水印不是表演，不在这里。staging 是表情 → 伴随动作：一个片段加一组通道值——表情开关只切贴图/部件（脸红的贴图只有 0.58 不透明度），五官要靠通道值才看得出来；片段名必须在 clips.json 里，通道名必须在 params.json 里。",
   "cues": [
     { "expression": "blush", "words": ["害羞", "脸红", "不好意思", "呜", "别这样盯着看", "招架不住"] },
     { "expression": "heart", "words": ["比心", "喜欢你", "爱你", "最喜欢", "心意", "把心"] },
-    { "expression": "sing", "words": ["唱歌", "唱一小段", "哼一小段", "清唱", "旋律", "♪", "啦——"] },
+    { "expression": "sing", "words": ["唱歌", "唱一小段", "哼一小段", "清唱", "旋律", "啦——"] },
     { "expression": "lean", "words": ["温柔", "轻轻", "安慰", "靠过来", "抱抱", "陪着你"] },
     { "expression": "leek", "words": ["拿葱", "大葱", "葱"] },
     { "expression": "chibi", "words": ["变小的", "QQ人", "小小一只", "变小"] },
@@ -12,23 +12,31 @@
   "staging": {
     "blush": {
       "clipId": "pout_puff",
-      "channels": { "MouthSmile": 0.45, "EyeOpenLeft": -0.35, "EyeOpenRight": -0.35, "FaceAngleZ": 6, "FaceAngleY": 4 }
+      "channels": { "MouthSmile": 0.65, "EyeOpenLeft": -0.5, "EyeOpenRight": -0.5, "FaceAngleZ": 9, "FaceAngleY": 6 }
     },
     "heart": {
       "clipId": "excited_bounce",
-      "channels": { "MouthSmile": 0.7, "EyeOpenLeft": 0.25, "EyeOpenRight": 0.25, "BrowLeftY": 0.3, "BrowRightY": 0.3 }
+      "channels": { "MouthSmile": 0.9, "EyeOpenLeft": 0.4, "EyeOpenRight": 0.4, "BrowLeftY": 0.45, "BrowRightY": 0.45 }
     },
     "sing": {
       "clipId": "sway",
-      "channels": { "MouthSmile": 0.5, "EyeOpenLeft": 0.15, "EyeOpenRight": 0.15, "FaceAngleZ": -4 }
+      "channels": { "MouthSmile": 0.7, "EyeOpenLeft": 0.25, "EyeOpenRight": 0.25, "FaceAngleZ": -6 }
     },
     "lean": {
       "clipId": "lean_in",
-      "channels": { "MouthSmile": 0.35, "EyeOpenLeft": -0.2, "EyeOpenRight": -0.2, "FaceAngleY": -5 }
+      "channels": { "MouthSmile": 0.55, "EyeOpenLeft": -0.35, "EyeOpenRight": -0.35, "FaceAngleY": -8 }
+    },
+    "leek": {
+      "clipId": "excited_bounce",
+      "channels": { "MouthSmile": 0.7, "EyeOpenLeft": 0.3, "EyeOpenRight": 0.3, "BrowLeftY": 0.4, "BrowRightY": 0.4 }
+    },
+    "chibi": {
+      "clipId": "excited_bounce",
+      "channels": { "MouthSmile": 0.6, "EyeOpenLeft": 0.2, "EyeOpenRight": 0.2 }
     },
     "swirl": {
       "clipId": "look_around",
-      "channels": { "EyeRightX": 0.6, "EyeRightY": 0.4, "FaceAngleZ": 10, "BrowLeftY": -0.3, "BrowRightY": -0.3 }
+      "channels": { "EyeRightX": 0.9, "EyeRightY": 0.6, "FaceAngleZ": 14, "BrowLeftY": -0.45, "BrowRightY": -0.45 }
     }
   }
 }

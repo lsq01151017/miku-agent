@@ -88,7 +88,7 @@ export const LIVE2D_DEFAULTS: Live2DConfigSection = {
   paramOverrides: '',
   stateHoldMs: 25_000,
   stateFadeMs: 8_000,
-  expressionHoldMs: 9_000,
+  expressionHoldMs: 15_000,
   speechTailMs: 600,
   speechMsPerChar: 130,
   idleAmount: 1,
