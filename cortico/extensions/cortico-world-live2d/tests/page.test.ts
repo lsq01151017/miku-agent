@@ -576,19 +576,21 @@ describe('播放器页面', () => {
     expect(node('ctx-fill').style.width).toBe('50.0%');
     expect(node('ctx').className).toBe('');
     expect(node('btn-run').textContent).toBe('权限·运行中');
+    expect(node('btn-run').className).toBe('running');   // 运行中挂青底,与「拖动」开关同语言
     // 过软预警线变黄,满过预算变红;暂停态照帧里画。
     send({ channels: {}, speaking: false, status: { estTokens: 210000, paused: false, maxTokens: 240000, softRatio: 0.85 } });
     expect(node('ctx').className).toBe('warn');
     send({ channels: {}, speaking: false, status: { estTokens: 250000, paused: true, maxTokens: 240000, softRatio: 0.85 } });
     expect(node('ctx').className).toBe('danger');
     expect(node('btn-run').textContent).toBe('权限·已暂停');
-    expect(node('btn-run').className).toContain('paused');
+    expect(node('btn-run').className).toBe('paused');
 
     // 权限按钮:按当前态往反方向扳,POST /dialog/run。
     node('btn-run').fire('click');
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(stubs.posted.some((p) => p.url === '/dialog/run' && p.body.includes('"action":"resume"'))).toBe(true);
     expect(node('btn-run').textContent).toBe('权限·运行中');   // 先照新值画,下一帧自然对齐
+    expect(node('btn-run').className).toBe('running');
 
     // ── 模型选择器:清单、激活点、实例内换名 ────────────────────────────────
     node('btn-model').fire('click');

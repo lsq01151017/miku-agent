@@ -637,11 +637,11 @@
     return String(Math.round(n));
   }
 
-  /** 权限按钮(运行开关);真值没到过之前只占位,不动作。 */
+  /** 权限按钮(运行开关);真值没到过之前只占位,不动作。运行中挂青底,与「拖动」的开关同语言。 */
   function renderRunChip() {
     if (!el.btnRun) return;
     el.btnRun.textContent = runPaused === null ? '权限 —' : (runPaused ? '权限·已暂停' : '权限·运行中');
-    el.btnRun.className = runPaused === true ? 'paused' : '';
+    el.btnRun.className = runPaused === null ? '' : (runPaused ? 'paused' : 'running');
     el.btnRun.title = runPaused === null
       ? '权限:等状态读数'
       : (runPaused ? '权限:她停着;点一下继续' : '权限:点一下暂停她');
