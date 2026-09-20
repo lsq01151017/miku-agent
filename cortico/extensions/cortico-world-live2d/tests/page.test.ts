@@ -332,7 +332,7 @@ describe('播放器页面', () => {
     // ── 眼神跟随:只眼睛和一点头,身体一律不碰 ─────────────────────────────
     stubs.written.length = 0;
     stubs.fireWindow('pointermove', { clientX: 1600, clientY: 450 });
-    stubs.pump(8); // 8 帧 ≈ 134ms:时间常数 0.03s,早就该到了
+    stubs.pump(8); // 8 帧 ≈ 134ms:时间常数 0.015s,早就该到了
     const eyed = stubs.written.filter((entry) => entry.param === 'ParamEyeBallX');
     expect(eyed.length).toBeGreaterThan(0);
     // 跟得上:推到最右,几帧之内就该走过九成。

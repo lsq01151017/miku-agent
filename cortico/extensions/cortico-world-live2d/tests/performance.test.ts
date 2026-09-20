@@ -228,6 +228,23 @@ describe('表现引擎', () => {
     expect(new Performance(pack).channelsAt(1000)).toEqual(a);
   });
 
+  it('视线游移是小幅的:不扫满量程,也不盖过眼神跟随', () => {
+    const performance = new Performance(pack);
+    let maxX = 0;
+    let maxY = 0;
+    let moved = false;
+    for (let t = 0; t < 20_000; t += 250) {
+      const values = performance.channelsAt(t);
+      maxX = Math.max(maxX, Math.abs(values.EyeRightX ?? 0));
+      maxY = Math.max(maxY, Math.abs(values.EyeRightY ?? 0));
+      if (Math.abs(values.EyeRightX ?? 0) > 0.05) moved = true;
+    }
+    // 曾是 2.4/1.2 的振幅,被量程裁成满幅 ±1:眼睛整幅摆动,鼠标移到哪儿都像没在看。
+    expect(maxX).toBeLessThanOrEqual(0.6);
+    expect(maxY).toBeLessThanOrEqual(0.3);
+    expect(moved).toBe(true); // 小幅不等于没有:她闲着时眼睛仍是活的
+  });
+
   it('待机幅度可以关掉:idleAmount=0 时她是不动的', () => {
     const performance = new Performance(pack, { idleAmount: 0 });
     expect(performance.channelsAt(1000)).toEqual(performance.channelsAt(2500));

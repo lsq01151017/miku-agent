@@ -23,7 +23,7 @@
    * 它还会写 `ParamBodyAngleX`,于是腰跟着鼠标转。这里自己算:按**指针位置**给偏移(看着她的脸
    * 就是看正前方)、指数逼近、只写眼睛和一点头,身体不动。
    */
-  var LOOK_TAU_SEC = 0.03;
+  var LOOK_TAU_SEC = 0.015;
   /** 眼神跟随的幅度:眼睛满偏,头只跟一点。 */
   var LOOK_EYE_RANGE = 1;
   var LOOK_HEAD_DEG = 6;

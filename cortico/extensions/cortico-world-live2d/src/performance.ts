@@ -205,6 +205,9 @@ export class Performance {
    * 全是**绝对时间的纯函数**(几个不同周期的正弦),不是随机数:同一时刻算出同一组值,
    * 所以对照与测试都成立。它一直在,让"她什么都没说"的时候也不是一张静止的图;
    * 有了它,台词片段与情绪基线才是叠在一个活人身上,而不是叠在雕像上。
+   *
+   * 视线游移是小幅的:渲染端把它叠在眼神跟随(指针)之上,扫满量程会把跟随盖掉——
+   * 眼睛永远在整幅摆动,鼠标移到哪儿都像没在看。
    */
   private idleChannels(nowMs: number): ChannelValues {
     const amount = this.opts.idleAmount;
@@ -218,8 +221,8 @@ export class Performance {
       FaceAngleY: round(breath * 0.8 * amount),
       FaceAngleX: round(sway * 1.1 * amount),
       FaceAngleZ: round(sway * 1.6 * amount),
-      EyeRightX: round(glanceX * 2.4 * amount),
-      EyeRightY: round(glanceY * 1.2 * amount),
+      EyeRightX: round(glanceX * 0.6 * amount),
+      EyeRightY: round(glanceY * 0.3 * amount),
       MouthSmile: round(breath * 0.06 * amount),
     };
   }
