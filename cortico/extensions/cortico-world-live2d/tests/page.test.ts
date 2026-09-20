@@ -295,7 +295,15 @@ describe('播放器页面', () => {
     node('stage').fire('pointermove', { clientX: 130, clientY: 90, pointerId: 1 });
     expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800 + 40, y: 450 - 25 });
 
-    // 拖覆层:拖动位移就是取景偏移,松手即存。
+    // 「拖动」没打开时,覆层上的拖动也不生效——平时点画面只是点。
+    node('hit').fire('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 });
+    node('hit').fire('pointermove', { clientX: 130, clientY: 90, pointerId: 1 });
+    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800 + 40, y: 450 - 25 });
+
+    // 打开「拖动」:拖动位移就是取景偏移,松手即存。
+    node('btn-drag').fire('click');
+    expect(node('btn-drag').textContent).toBe('拖动：开');
+    expect(node('btn-drag').className).toBe('on');
     node('hit').fire('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 });
     node('hit').fire('pointermove', { clientX: 130, clientY: 90, pointerId: 1 });
     expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800 + 70, y: 450 - 35 });
@@ -307,6 +315,12 @@ describe('播放器页面', () => {
     node('hit').fire('pointerup', {});
     expect(stubs.stored.length).toBeGreaterThan(0);
     expect(JSON.parse(stubs.stored[stubs.stored.length - 1]!)).toMatchObject({ zoom: 1.5, x: 90, y: -35 });
+    // 再按一次关掉:画面回到点不动。
+    node('btn-drag').fire('click');
+    expect(node('btn-drag').textContent).toBe('拖动：关');
+    node('hit').fire('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 });
+    node('hit').fire('pointermove', { clientX: 160, clientY: 90, pointerId: 1 });
+    expect(stubs.positions[stubs.positions.length - 1]).toEqual({ x: 800 + 90, y: 450 - 35 });
 
     // 复位:回到 100% 与画面中心。
     node('btn-reset').fire('click');
@@ -333,6 +347,15 @@ describe('播放器页面', () => {
     stubs.pump(25);
     const back = stubs.written.filter((entry) => entry.param === 'ParamEyeBallX').pop()!;
     expect(Math.abs(back.value)).toBeLessThan(0.1);
+
+    // 光标停住:停满两秒前一直盯着它,满两秒才许把眼神收回来。
+    stubs.fireWindow('pointermove', { clientX: 1600, clientY: 450 });
+    stubs.pump(30); // ≈0.5s:还在盯
+    const locked = stubs.written.filter((entry) => entry.param === 'ParamEyeBallX').pop()!;
+    expect(locked.value).toBeGreaterThan(0.9);
+    stubs.pump(110); // 累计 ≈2.3s:过了两秒,回正前方
+    const freed = stubs.written.filter((entry) => entry.param === 'ParamEyeBallX').pop()!;
+    expect(Math.abs(freed.value)).toBeLessThan(0.1);
 
     // ── 对话:她的话是字幕,我发过的话只在底部输入区 ─────────────────────────
     expect(stubs.sockets.length).toBe(1);

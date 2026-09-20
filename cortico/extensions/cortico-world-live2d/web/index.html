@@ -18,9 +18,11 @@
   /* 指针落在这层透明覆层上,画布自己不接指针:浏览器手里没有能拖的东西,拖动就不会拖出一份跟着鼠标的副本。 */
   canvas { display: block; -webkit-user-drag: none; user-select: none; touch-action: none; }
   #hit {
-    position: fixed; inset: 0; z-index: 1; cursor: grab; touch-action: none;
+    position: fixed; inset: 0; z-index: 1; cursor: default; touch-action: none;
     -webkit-user-drag: none; user-select: none;
   }
+  /* 「拖动」开关打开后,画面才是一块可以抓的东西。 */
+  #hit.armed { cursor: grab; }
   #hit.dragging { cursor: grabbing; }
   /* 覆层盖住整页,面板、输入区、提示要压在它上面才点得到。 */
   #conn, #talk, #why, #bottom, #panel { z-index: 3; }
@@ -129,6 +131,7 @@
   .ctl input[type=range] { width: 100%; accent-color: var(--glass-accent); }
   .btns { display: flex; gap: 6px; margin-top: 8px; }
   .btns button { flex: 1; padding: 5px 8px; font-size: 12px; }
+  .btns button.on { background: rgba(57, 197, 187, 0.30); border-color: var(--glass-accent); color: #dff6f2; }
   #channels { font: 11px/1.5 ui-monospace, monospace; color: var(--glass-dim); }
   #channels div { display: flex; justify-content: space-between; }
 </style>
@@ -137,7 +140,7 @@
 <canvas id="stage" draggable="false"></canvas>
 <div id="hit"></div>
 <div id="conn" class="glass">连接中…</div>
-<div id="talk" class="glass">这一页是她的身体。<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话。拖动画面可以挪动她。</div>
+<div id="talk" class="glass">这一页是她的身体。<a href="http://127.0.0.1:18790/" target="_blank">控制台</a>那边是同一个对话。要挪动她：面板「更多」里打开「拖动」，再拖画面。</div>
 <div id="why"></div>
 
 <!-- 底部一栏:她的字幕在上,我发过的话与输入框在下。 -->
@@ -174,6 +177,7 @@
         <label>左右<input id="offset-x" type="range" min="-400" max="400" value="0"><span class="num" id="offset-x-val">0</span></label>
         <label>上下<input id="offset-y" type="range" min="-400" max="400" value="0"><span class="num" id="offset-y-val">0</span></label>
         <div class="btns">
+          <button id="btn-drag" type="button">拖动：关</button>
           <button id="btn-reset" type="button">复位</button>
           <button id="btn-save" type="button">记住</button>
         </div>

@@ -63,6 +63,7 @@
     offsetYVal: document.getElementById('offset-y-val'),
     reset: document.getElementById('btn-reset'),
     save: document.getElementById('btn-save'),
+    btnDrag: document.getElementById('btn-drag'),
     subtitle: document.getElementById('subtitle'),
     composer: document.getElementById('composer'),
     mine: document.getElementById('mine'),
@@ -104,10 +105,15 @@
   var naturalW = 0;
   var naturalH = 0;
   var dragging = null;
+  // 拖动是开关的:面板「更多」里按下「拖动」以后,覆层上的拖动才生效——平时点画面只是点。
+  var dragArmed = false;
   /** 只启动一次(见 boot)。 */
   var booted = false;
-  // 眼神跟随:目标来自指针位置,当前值指数逼近它。
+  // 眼神跟随:目标来自指针位置,当前值指数逼近它。光标停住超过 LOOK_HOLD_MS,
+  // 目标才回到正前方——停着不动的那段时间里,她一直盯着它。
   var look = { x: 0, y: 0, targetX: 0, targetY: 0 };
+  var lookHoldUntilMs = 0;
+  var LOOK_HOLD_MS = 2000;
   var lookParams = null;
   var lastTickMs = 0;
   // 对话:走控制台那条 WebSocket,或者走外部 Agent;字幕文本与它的淡出计时在这里。
@@ -393,10 +399,27 @@
     }
 
     // 指针全落在覆层上:画布自己不是事件目标,浏览器拖不出它的副本。
+    // 拖动要先用面板里的「拖动」开关打开,平时点画面只是点。
     var dragSurface = el.hit || el.canvas;
+    var setArmed = function (armed) {
+      dragArmed = armed;
+      if (!armed) dragging = null; // 开关关掉时若正拖着,就地停手
+      if (el.btnDrag) {
+        el.btnDrag.className = armed ? 'on' : '';
+        el.btnDrag.textContent = armed ? '拖动：开' : '拖动：关';
+      }
+      if (dragSurface && dragSurface.className.indexOf) {
+        dragSurface.className = dragSurface.className
+          .replace(' armed', '').replace(' dragging', '') + (armed ? ' armed' : '');
+      }
+    };
+    if (el.btnDrag && el.btnDrag.addEventListener) {
+      el.btnDrag.addEventListener('click', function () { setArmed(!dragArmed); });
+    }
     if (dragSurface && dragSurface.addEventListener) {
       dragSurface.addEventListener('pointerdown', function (event) {
         if (event && event.preventDefault) event.preventDefault();
+        if (!dragArmed) return;
         dragging = { x: event.clientX, y: event.clientY, fromX: view.x, fromY: view.y };
         if (dragSurface.className.indexOf('dragging') < 0) dragSurface.className += ' dragging';
         if (dragSurface.setPointerCapture) { try { dragSurface.setPointerCapture(event.pointerId); } catch (e) { /* 可选 */ } }
@@ -459,7 +482,8 @@
   /**
    * 眼神跟随的输入:指针在页面上的位置,折算成模型中心出发的 [-1,1] 偏移。
    *
-   * 用整页而不是画布:鼠标移到面板上她也该看过去;指针离开窗口就慢慢看回正前方。
+   * 用整页而不是画布:鼠标移到面板上她也该看过去。光标一动就盯向它;停住满
+   * `LOOK_HOLD_MS` 才许把眼神收回来(在 tick 里判),指针离开窗口则立刻收。
    */
   function bindLook() {
     var onMove = function (event) {
@@ -468,8 +492,9 @@
       var halfH = Math.max(1, window.innerHeight / 2);
       look.targetX = Math.max(-1, Math.min(1, (event.clientX - window.innerWidth / 2) / halfW));
       look.targetY = Math.max(-1, Math.min(1, (event.clientY - window.innerHeight / 2) / halfH));
+      lookHoldUntilMs = performance.now() + LOOK_HOLD_MS;
     };
-    var onLeave = function () { look.targetX = 0; look.targetY = 0; };
+    var onLeave = function () { look.targetX = 0; look.targetY = 0; lookHoldUntilMs = 0; };
     if (window.addEventListener) {
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerleave', onLeave);
@@ -724,6 +749,12 @@
     var now = performance.now();
     var dt = lastTickMs === 0 ? 0.016 : Math.min(0.1, (now - lastTickMs) / 1000);
     lastTickMs = now;
+    // 光标停满 LOOK_HOLD_MS:眼神才许离开它,回正前方。停着的那段时间里一直盯着。
+    if (lookHoldUntilMs !== 0 && now >= lookHoldUntilMs) {
+      look.targetX = 0;
+      look.targetY = 0;
+      lookHoldUntilMs = 0;
+    }
     var ease = 1 - Math.exp(-dt / LOOK_TAU_SEC);
     look.x += (look.targetX - look.x) * ease;
     look.y += (look.targetY - look.y) * ease;
