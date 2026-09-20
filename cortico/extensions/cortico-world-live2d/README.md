@@ -8,7 +8,7 @@ Owner: `src/index.ts`
 
 | 文件 | 内容 |
 |---|---|
-| `src/pack.ts` | 读 `params.json` / `clips.json` / `vocab.json` / `expressions.json`,并报出数据缺口 |
+| `src/pack.ts` | 读 `params.json` / `clips.json` / `vocab.json` / `expressions.json` / `pat.json`,并报出数据缺口 |
 | `src/baseline.ts` | 内部状态 → 通道基线(情绪驱动的那一层) |
 | `src/expressions.ts` | 心情 → 模型自带表情 |
 | `src/directives.ts` | 台词 → 演出指令(措辞命中哪个表情) |
