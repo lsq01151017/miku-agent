@@ -339,7 +339,7 @@ describe('播放器页面', () => {
     // ── 摸头:不开「拖动」,左键按在头上就是摸 ─────────────────────────────
     stubs.posted.length = 0;
     stubs.written.length = 0;
-    const headY = 450 - 100 * fit * 0.38;
+    const headY = 450 - 100 * fit * 0.43;
     node('hit').fire('pointerdown', { clientX: 800, clientY: headY, button: 0, pointerId: 2 });
     expect(stubs.posted).toEqual([{ url: '/pat', body: '{"active":true}' }]);
     // 摸头时头跟着手大幅转:指针推到最右,头的角度远超平时的 6 度。

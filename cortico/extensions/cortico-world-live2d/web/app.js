@@ -409,15 +409,16 @@
     // 拖动要先用面板里的「拖动」开关打开;没开时,左键按在头上是摸头。
     var dragSurface = el.hit || el.canvas;
 
-    /** 她的头在画面上的区域:按模型此刻的尺寸估一个宽松的椭圆,她放大区域也跟着大。 */
+    /** 她的头在画面上的区域:头顶一圈(按模型此刻的尺寸,她放大区域也跟着大)。
+     *  分位按真实模型量过:脸颊在顶部往下 0.16 高度处,头顶再往上约 0.08。 */
     function headHit(clientX, clientY) {
       if (!model) return false;
       var w = model.width, h = model.height; // 含缩放
       // 模型中心 = 画面中心 + 取景偏移(view.x/y 是偏移,不是坐标)。
       var cx = window.innerWidth / 2 + view.x;
       var cy = window.innerHeight / 2 + view.y;
-      var dx = (clientX - cx) / (w * 0.24);
-      var dy = (clientY - (cy - h * 0.38)) / (h * 0.16);
+      var dx = (clientX - cx) / (w * 0.18);
+      var dy = (clientY - (cy - h * 0.43)) / (h * 0.08);
       return dx * dx + dy * dy <= 1;
     }
 

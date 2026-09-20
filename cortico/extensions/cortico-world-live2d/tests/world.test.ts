@@ -575,12 +575,13 @@ describe('生命周期', () => {
 });
 
 describe('通道偏移与参数定值', () => {
-  it('偏移加在合成之后:中性基线 0 加上 1 才是模型的"睁眼"', async () => {
+  it('偏移加在合成之后:合成出的通道值加偏移再下发', async () => {
     const live = await start({ paramOffset: 'EyeOpenLeft=1, EyeOpenRight=1' });
     const controller = new AbortController();
     const frame = await firstFrame(controller.signal) as { channels: Record<string, number> };
     controller.abort();
-    // 包的约定是"0=平常睁眼",模型的参数是"1=睁眼":不加偏移就会写成全闭。
+    // 机制用例:合成出的 0 加偏移 1 下发。眨眼类的通道不要配偏移——渲染端对它们是
+    // 加法写入,0 本来就是"不动眨眼";+1 会把眼睛钉死在睁开,眯眼与闭眼全被抵消。
     expect(frame.channels.EyeOpenLeft).toBe(1);
     expect(frame.channels.EyeOpenRight).toBe(1);
   });
