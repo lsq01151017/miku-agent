@@ -90,8 +90,8 @@
   #subtitle {
     position: relative;
     width: min(1140px, calc(100vw - 28px)); padding: 8px 16px; border-radius: 10px;
-    /* 半透明磨砂:她从字幕后面透出来;模糊把透出来的她揉虚,墨字仍然读得清。 */
-    border: 2px solid var(--pop-edge); background: rgba(253, 254, 255, 0.72);
+    /* 半透明磨砂,不描墨线:她从字幕后面透出来,模糊把透上来的她揉虚;框会把她隔在外面。 */
+    background: rgba(253, 254, 255, 0.72);
     -webkit-backdrop-filter: blur(10px) saturate(120%);
     backdrop-filter: blur(10px) saturate(120%);
     box-shadow: 3px 3px 0 rgba(10, 14, 26, 0.85);
