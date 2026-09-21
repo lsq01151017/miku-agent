@@ -41,7 +41,9 @@
   #hit.armed { cursor: grab; }
   #hit.dragging { cursor: grabbing; }
   /* 覆层盖住整页,面板、输入区、提示要压在它上面才点得到。 */
-  #conn, #talk, #why, #bottom, #panel { z-index: 3; }
+  #conn, #talk, #why, #panel { z-index: 3; }
+  /* 输入区再高一层:模型选择单从它向上弹,要盖过右侧面板(同层时后画的压先画的)。 */
+  #bottom { z-index: 4; }
 
   .glass {
     background: var(--pop-panel);
