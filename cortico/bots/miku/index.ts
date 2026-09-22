@@ -26,10 +26,10 @@ const HERE = resolve(import.meta.dirname);
 const ORIENTATION_FILE = resolve(HERE, 'persona/ORIENTATION.md');
 
 /**
- * 这个 Persona 为之设计的渠道:终端与自己的形象。别的平台不声明——渠道是扩展点,
- * 要接哪个就写一个 World 包,再把它的 id 加到这里。
+ * 这个 Persona 为之设计的渠道:终端、自己的形象,和请 DSH 干活的工作接口。别的平台不
+ * 声明——渠道是扩展点,要接哪个就写一个 World 包,再把它的 id 加到这里。
  */
-const DECLARES: readonly WorldDeclaration[] = ['terminal', 'live2d'];
+const DECLARES: readonly WorldDeclaration[] = ['terminal', 'live2d', 'work'];
 
 /**
  * 形象层拿到内部状态的入口。

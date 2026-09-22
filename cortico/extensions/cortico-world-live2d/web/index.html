@@ -145,9 +145,9 @@
     max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* 没配控制台时,走控制台的那三样(用量/模型/权限)整块不出现。 */
-  #dialog-row #ctx, #dialog-row #btn-model, #dialog-row #btn-run { display: none; }
+  #dialog-row #ctx, #dialog-row #btn-model, #dialog-row #btn-perm { display: none; }
   #dialog-row.on #ctx { display: inline-flex; }
-  #dialog-row.on #btn-model, #dialog-row.on #btn-run { display: inline-block; }
+  #dialog-row.on #btn-model, #dialog-row.on #btn-perm { display: inline-block; }
   #ctx { align-items: center; gap: 6px; min-width: 0; padding: 0 2px; }
   #ctx-bar {
     flex: none; width: 64px; height: 8px; overflow: hidden;
@@ -157,9 +157,9 @@
   #ctx.warn #ctx-fill { background: #d99a06; }
   #ctx.danger #ctx-fill { background: #c0392b; }
   #ctx-num { font: 700 11px/1.6 ui-monospace, monospace; color: var(--pop-ink); white-space: nowrap; }
-  /* 权限按钮与「拖动」同一套开关语言:运行中挂青底,暂停是暖色描边。 */
-  #btn-run.running { background: var(--pop-cyan); }
-  #btn-run.paused { color: #a3471f; border-color: #a3471f; }
+  /* 权限按钮按态挂色:放行是青底(与「拖动:开」同一套),关是暖色描边,每次问是默认白牌。 */
+  #btn-perm.trusted { background: var(--pop-cyan); }
+  #btn-perm.off { color: #a3471f; border-color: #a3471f; }
 
   /* 拖图进输入区:墨线换成虚线,松手或拖出复原。 */
   #composer.dragover { border-style: dashed; }
@@ -199,6 +199,23 @@
   #model-pop .mrow.active::before { content: "●"; flex: none; color: var(--pop-cyan); font-size: 8px; }
   #model-pop .mrow.sub { padding-left: 26px; font-size: 11px; }
   #model-pop .mrow.sub.active::before { margin-left: -12px; }
+
+  /* 权限选择单:与模型选择单同一套白玻璃,行更少所以更窄。 */
+  #perm-pop {
+    display: none; position: absolute; right: 10px; bottom: calc(100% + 8px);
+    width: min(240px, calc(100vw - 40px)); max-height: 42vh; overflow-y: auto; padding: 8px;
+    font: 12px/1.6 system-ui, "Microsoft YaHei", sans-serif;
+  }
+  #perm-pop.on { display: block; }
+  #perm-pop .note { color: var(--pop-dim); padding: 4px 6px; }
+  #perm-pop .mrow {
+    display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; cursor: pointer;
+  }
+  #perm-pop .mrow:hover { background: var(--pop-cyan-soft); }
+  #perm-pop .mrow .who { flex: none; color: var(--pop-steel); font-weight: 700; }
+  #perm-pop .mrow .what { color: var(--pop-ink); }
+  #perm-pop .mrow.active { background: var(--pop-cyan-soft); }
+  #perm-pop .mrow.active::before { content: "●"; flex: none; color: var(--pop-cyan); font-size: 8px; }
 
   #panel .more {
     width: 100%; margin-top: 8px; padding: 4px 8px; font-size: 11px; font-weight: 600;
@@ -278,12 +295,13 @@
       <span class="grow"></span>
       <button id="btn-history" type="button" title="展开我发过的话">历史</button>
       <button id="btn-model" type="button" title="换她跑在哪个模型上">模型 —</button>
-      <button id="btn-run" type="button" title="等状态读数">权限 —</button>
+      <button id="btn-perm" type="button" title="她请 DSH 干活的权限">权限 —</button>
       <button type="submit">说</button>
     </div>
   </form>
   <input id="file-input" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>
   <div id="model-pop" class="glass"></div>
+  <div id="perm-pop" class="glass"></div>
 </div>
 </div>
 

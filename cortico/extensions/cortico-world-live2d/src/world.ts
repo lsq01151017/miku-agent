@@ -75,11 +75,11 @@ const TERMINAL_CHAT_PATH = '/ws/providers/world%3Aterminal/panels/chat';
 const AGENT_CHAT_PATH = '/agent/chat';
 /** 摸头的入口:页面按住左键在她头上时打这里,active 带心跳续期。 */
 const PAT_PATH = '/pat';
-/** 对话框四件套(上下文用量/模型/运行开关)的控制台代理入口。 */
+/** 对话框四件套(上下文用量/模型/权限)的控制台代理入口;权限读写走配置组那一对。 */
 const DIALOG_PROVIDERS_PATH = '/dialog/providers';
 const DIALOG_MODELS_PATH = '/dialog/models';
 const DIALOG_MODEL_PATH = '/dialog/model';
-const DIALOG_RUN_PATH = '/dialog/run';
+const DIALOG_CONFIG_PATH = '/dialog/config';
 /** 控制台状态轮询间隔;页面连着才轮,连上先取一次。 */
 const STATUS_POLL_MS = 2_000;
 /** 页面每两秒续一次摸头;超过这个间隔没续上,World 自己把摸头收掉(页面崩了也不能一直挂着)。 */
@@ -705,26 +705,51 @@ export class Live2DWorld implements World {
     }
   }
 
-  /** 运行开关:暂停/继续是"她许不许动"的总闸,转控制台的 /api/run/*。 */
-  private async receiveDialogRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  /** 配置组的读:页面的权限按钮要知道 work 组现在是什么态。只回那一组的值。 */
+  private async sendDialogConfig(url: URL, res: ServerResponse): Promise<void> {
     if (this.consoleMissing(res)) return;
-    let body: { action?: unknown };
+    const group = url.searchParams.get('group') ?? '';
+    if (group === '') {
+      this.sendJson(res, { error: '缺少 group 参数' });
+      return;
+    }
     try {
-      body = await readJsonBody(req) as { action?: unknown };
+      const out = await this.consoleJson('/api/config') as { groups?: Array<{ group?: { id?: unknown }; values?: unknown }> };
+      const hit = (out.groups ?? []).find((entry) => entry.group?.id === group);
+      if (!hit) {
+        this.sendJson(res, { error: `没有 ${group} 这个配置组` });
+        return;
+      }
+      this.sendJson(res, { values: hit.values ?? {} });
+    } catch (error) {
+      this.sendJson(res, { error: `取配置失败:${String(error instanceof Error ? error.message : error)}` });
+    }
+  }
+
+  /** 配置组的写:按组 schema 校验的活由控制台干,这里只转手。 */
+  private async receiveDialogConfig(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.consoleMissing(res)) return;
+    let body: { group?: unknown; values?: unknown };
+    try {
+      body = await readJsonBody(req) as { group?: unknown; values?: unknown };
     } catch {
       res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('请求体不是 JSON');
       return;
     }
-    const action = body.action === 'pause' || body.action === 'resume' ? body.action : '';
-    if (action === '') {
-      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('action 只认 pause 或 resume');
+    const group = typeof body.group === 'string' ? body.group : '';
+    if (group === '') {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('缺少 group');
+      return;
+    }
+    if (body.values === null || typeof body.values !== 'object' || Array.isArray(body.values)) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('values 要是对象');
       return;
     }
     try {
-      await this.consoleJson(`/api/run/${action}`, { method: 'POST', body: '{}' });
+      await this.consoleJson('/api/config', { method: 'POST', body: JSON.stringify({ group, values: body.values }) });
       this.sendJson(res, { ok: true });
     } catch (error) {
-      this.sendJson(res, { error: `运行开关失败:${String(error instanceof Error ? error.message : error)}` });
+      this.sendJson(res, { error: `写配置失败:${String(error instanceof Error ? error.message : error)}` });
     }
   }
 
@@ -748,7 +773,6 @@ export class Live2DWorld implements World {
       this.dialogStatus = {
         estTokens: num(loop.estTokens),
         messageCount: num(loop.messageCount),
-        paused: loop.paused === true,
         maxTokens: num(ctx.maxTokens),
         softRatio: num(ctx.softRatio),
         hardTokens: num(ctx.hardTokens),
@@ -958,8 +982,8 @@ export class Live2DWorld implements World {
       void this.receiveDialogModel(req, res);
       return;
     }
-    if (req.method === 'POST' && url.pathname === DIALOG_RUN_PATH) {
-      void this.receiveDialogRun(req, res);
+    if (req.method === 'POST' && url.pathname === DIALOG_CONFIG_PATH) {
+      void this.receiveDialogConfig(req, res);
       return;
     }
     if (req.method !== 'GET') {
@@ -971,6 +995,7 @@ export class Live2DWorld implements World {
       if (url.pathname === '/app.js') return this.sendFile(res, join(WEB_DIR, 'app.js'));
       if (url.pathname === DIALOG_PROVIDERS_PATH) return void this.sendDialogProviders(res);
       if (url.pathname === DIALOG_MODELS_PATH) return void this.sendDialogModels(url, res);
+      if (url.pathname === DIALOG_CONFIG_PATH) return void this.sendDialogConfig(url, res);
       if (url.pathname === '/pack/params.json') {
         return this.sendJson(res, this.pack?.params ?? {});
       }

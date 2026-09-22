@@ -95,7 +95,7 @@ Owner: `src/index.ts`
 
 两个都没配就没有输入区,页面上会说明原因;Agent 不在时字幕里出现一句能读懂的话,而不是空转。
 
-## 对话框四件套:读数、附图、开关与选模型
+## 对话框按钮行:读数、附图、模型与真权限
 
 输入框下面一行按钮(附图、用量读数、历史、模型、权限、发送),数据都从控制台来,页面仍只连
 本 World 这一个来源:
@@ -104,7 +104,7 @@ Owner: `src/index.ts`
 |---|---|
 | 上下文用量(条 + 计数;过软预警线变黄,满过预算变红) | World 轮询控制台 `/api/status`(页面连着才轮,2 秒一次,连上先取一次),压成 `status` 随 `/state` 帧下发 |
 | 附图(选择/拖入/粘贴;8 张、长边 2048、单张 6MB,与控制台对话框同限) | 页面归一化成 base64,随 `{type:'msg', text, images}` 走 `/chat`——终端通道本来就收这个字段,代理不动 |
-| 权限按钮(暂停/继续) | `POST /dialog/run` → 控制台 `/api/run/*`。这是"她许不许动"的总闸:框架没有工具级审批,她的工具只有记忆操作 |
+| 权限按钮(每次问/放行/关,三态弹层) | `GET/POST /dialog/config` → 控制台 `/api/config`,读写 `worlds.work.permission`——她请 DSH 干活的真权限,值在 work 扩展包的配置组里;work 组不在(扩展没装)时按钮收起 |
 | 模型选择(先选端点实例,实例内再换模型名) | `GET /dialog/providers`(manifest 里 llm 页各取 `settings/state` 合成平表)、`GET /dialog/models?name=`、`POST /dialog/model` → 语言模型页的 `activate`。实例内换名保住模型档的其余键,只改 `model` |
 
 没配 `consoleUrl` 时代理端点回 409,走控制台的那三样(用量/模型/权限)不出现;控制台不在时

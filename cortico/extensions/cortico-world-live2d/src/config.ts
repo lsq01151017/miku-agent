@@ -103,54 +103,55 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
     type: 'object',
     title: 'Live2D 形象',
     description: '形象由内部状态与她说的话共同驱动;这一页配素材与渲染服务。',
+    // 键是 cfg 里的点分路径(与 terminal 组同一规矩),控制台按它读写活配置。
     properties: {
-      port: {
+      'worlds.live2d.port': {
         type: 'integer',
         title: '渲染端口',
         minimum: 1024,
         maximum: 65535,
         description: '只绑 127.0.0.1。端口被占用时向上找,最多 5 个。',
       },
-      'packDir': {
+      'worlds.live2d.packDir': {
         type: 'string',
         title: '素材包目录',
         description: '含 params.json / clips.json / vocab.json。相对路径按 bot 代码包解析。',
       },
-      'webDir': {
+      'worlds.live2d.webDir': {
         type: 'string',
         title: '播放器库目录',
         description: '里面有 js/pixi.min.js、js/live2dcubismcore.min.js、js/cubism4.min.js。',
       },
-      'modelDir': {
+      'worlds.live2d.modelDir': {
         type: 'string',
         title: '模型目录',
         description: '含 .model3.json 的目录;模型体积大且多带分发限制,不进版本库。',
       },
-      'paramMap': {
+      'worlds.live2d.paramMap': {
         type: 'string',
         title: '通道参数修正',
         description: '写成「通道=参数名」，多项用逗号分隔，例如 CheekPuff=Paramguzui。'
           + '包里的参数名只是建议；本模型的参数叫别的名字时在这里改，右侧留空表示这条通道不接。',
       },
-      'modelFile': {
+      'worlds.live2d.modelFile': {
         type: 'string',
         title: '模型入口文件',
         description: '留空 = 用模型目录里唯一的那个 .model3.json;多于一个时必须点名。',
       },
-      'paramOffset': {
+      'worlds.live2d.paramOffset': {
         type: 'string',
         title: '通道值偏移',
         description: '写成「通道=数字」，多项用逗号分隔，例如 EyeOpenLeft=1。'
           + '用在包的约定与模型参数的约定不一致的通道上：包说「0=平常睁眼」，而模型的参数是「1=睁眼」，'
           + '不加偏移就写成了全闭。',
       },
-      'paramOverrides': {
+      'worlds.live2d.paramOverrides': {
         type: 'string',
         title: '参数定值',
         description: '写成「参数名=数值」，多项用逗号分隔，渲染端每帧写一次，例如 Param137=1 关掉水印。'
           + '用在不由通道驱动的参数上。',
       },
-      'stateHoldMs': {
+      'worlds.live2d.stateHoldMs': {
         type: 'integer',
         title: '表情保持',
         minimum: 1000,
@@ -158,7 +159,7 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         'x-suffix': 'ms',
         description: '一个表情/姿态压住多久后开始淡出。基线不参与淡出,它一直在。',
       },
-      'stateFadeMs': {
+      'worlds.live2d.stateFadeMs': {
         type: 'integer',
         title: '淡出时长',
         minimum: 0,
@@ -166,7 +167,7 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         'x-suffix': 'ms',
         description: '淡出用的时间;太短会显得抽一下。',
       },
-      'expressionHoldMs': {
+      'worlds.live2d.expressionHoldMs': {
         type: 'integer',
         title: '台词表情保持',
         minimum: 0,
@@ -174,7 +175,7 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         'x-suffix': 'ms',
         description: '她的话命中表情指令后挂多久。过期回到心情对应的表情;写成 0 就是不按措辞切表情。',
       },
-      'speechTailMs': {
+      'worlds.live2d.speechTailMs': {
         type: 'integer',
         title: '口型最短时长',
         minimum: 0,
@@ -182,7 +183,7 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         'x-suffix': 'ms',
         description: '一段话说完后口型至少再动的时长,也是极短一句话的下限。',
       },
-      'speechMsPerChar': {
+      'worlds.live2d.speechMsPerChar': {
         type: 'integer',
         title: '说话速度',
         minimum: 10,
@@ -190,20 +191,20 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         'x-suffix': 'ms/字',
         description: '按字数估这段话说出来要多久;口型动的时长按它算。没有语音合成,这是估算不是唇形同步。',
       },
-      'idleAmount': {
+      'worlds.live2d.idleAmount': {
         type: 'number',
         title: '待机动作幅度',
         minimum: 0,
         maximum: 3,
         description: '呼吸、微晃、视线游移的幅度倍率,一直在跑;设 0 她就完全静止。',
       },
-      'consoleUrl': {
+      'worlds.live2d.consoleUrl': {
         type: 'string',
         title: '控制台地址',
         description: '例如 http://127.0.0.1:18790。填了它,形象页的输入就转到控制台的终端通道;'
           + '留空则不走这一路。',
       },
-      'agentUrl': {
+      'worlds.live2d.agentUrl': {
         type: 'string',
         title: '外部 Agent 地址',
         description: '例如 http://127.0.0.1:8790。填了它,形象页的输入就送给这个 Agent,'

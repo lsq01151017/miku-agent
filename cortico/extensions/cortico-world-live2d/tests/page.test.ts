@@ -231,6 +231,9 @@ function stubBrowser(): {
         if (target.includes('/dialog/models')) {
           return { models: [{ id: 'miku-x' }, { id: 'miku-y' }] };
         }
+        if (target.includes('/dialog/config')) {
+          return { values: { 'worlds.work.permission': 'ask', 'worlds.work.dshUrl': 'http://127.0.0.1:43120' } };
+        }
         return {
           FaceAngleZ: { param: 'ParamAngleZ', range: [-30, 30] },
           MouthSmile: { param: 'ParamMouthForm', range: [-1, 1] },
@@ -566,31 +569,45 @@ describe('播放器页面', () => {
     send({ channels: {}, speaking: false, page: 'ff00ff00' });
     expect(stubs.reloads).toHaveLength(1);   // 不一致:这份页面是旧的,刷新成新的
 
-    // ── 对话框按钮行:四件套都在输入区里,状态帧里的用量与运行态照实画 ────────
+    // ── 对话框按钮行:四件套都在输入区里,状态帧里的用量照实画 ──────────────
     expect(node('dialog-row').className).toBe('on');   // 配了控制台,用量/模型/权限出现
     send({
       channels: {}, speaking: false,
-      status: { estTokens: 120000, messageCount: 30, paused: false, maxTokens: 240000, softRatio: 0.85, hardTokens: 130000 },
+      status: { estTokens: 120000, messageCount: 30, maxTokens: 240000, softRatio: 0.85, hardTokens: 130000 },
     });
     expect(node('ctx-num').textContent).toBe('120.0k/240.0k');
     expect(node('ctx-fill').style.width).toBe('50.0%');
     expect(node('ctx').className).toBe('');
-    expect(node('btn-run').textContent).toBe('权限·运行中');
-    expect(node('btn-run').className).toBe('running');   // 运行中挂青底,与「拖动」开关同语言
-    // 过软预警线变黄,满过预算变红;暂停态照帧里画。
-    send({ channels: {}, speaking: false, status: { estTokens: 210000, paused: false, maxTokens: 240000, softRatio: 0.85 } });
+    // 过软预警线变黄,满过预算变红。
+    send({ channels: {}, speaking: false, status: { estTokens: 210000, maxTokens: 240000, softRatio: 0.85 } });
     expect(node('ctx').className).toBe('warn');
-    send({ channels: {}, speaking: false, status: { estTokens: 250000, paused: true, maxTokens: 240000, softRatio: 0.85 } });
+    send({ channels: {}, speaking: false, status: { estTokens: 250000, maxTokens: 240000, softRatio: 0.85 } });
     expect(node('ctx').className).toBe('danger');
-    expect(node('btn-run').textContent).toBe('权限·已暂停');
-    expect(node('btn-run').className).toBe('paused');
 
-    // 权限按钮:按当前态往反方向扳,POST /dialog/run。
-    node('btn-run').fire('click');
+    // ── 权限按钮:真权限,值来自 work 配置组 ──────────────────────────────
+    expect(node('btn-perm').textContent).toBe('权限·每次问');   // 初值取自 /dialog/config
+    expect(node('btn-perm').className).toBe('');
+    node('btn-perm').fire('click');
     await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(stubs.posted.some((p) => p.url === '/dialog/run' && p.body.includes('"action":"resume"'))).toBe(true);
-    expect(node('btn-run').textContent).toBe('权限·运行中');   // 先照新值画,下一帧自然对齐
-    expect(node('btn-run').className).toBe('running');
+    expect(node('perm-pop').className).toContain('on');
+    const permRows = node('perm-pop').children.filter((child) => child.className.indexOf('mrow') >= 0);
+    expect(permRows.map((row) => row.children[0]!.textContent)).toEqual(['每次问', '放行', '关']);
+    expect(permRows[0]!.className).toContain('active');       // 当前是每次问
+    // 点「放行」:写回 work 配置组(键是点分路径),牌子照新值画、挂青底。
+    permRows[1]!.fire('click');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(stubs.posted.some((p) => p.url === '/dialog/config'
+      && p.body.includes('"worlds.work.permission":"trusted"'))).toBe(true);
+    expect(node('btn-perm').textContent).toBe('权限·已放行');
+    expect(node('btn-perm').className).toBe('trusted');
+    // 弹层还开着:直接点「关」,牌子换暖色描边。
+    const permRows2 = node('perm-pop').children.filter((child) => child.className.indexOf('mrow') >= 0);
+    permRows2[2]!.fire('click');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(stubs.posted.some((p) => p.url === '/dialog/config'
+      && p.body.includes('"worlds.work.permission":"off"'))).toBe(true);
+    expect(node('btn-perm').textContent).toBe('权限·已关');
+    expect(node('btn-perm').className).toBe('off');
 
     // ── 模型选择器:清单、激活点、实例内换名 ────────────────────────────────
     node('btn-model').fire('click');

@@ -549,6 +549,24 @@ describe('对话框的控制台代理', () => {
           res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: true }));
           return;
         }
+        if (path === '/api/config' && req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({
+            groups: [
+              { group: { id: 'live2d', title: 'Live2D 形象' }, values: { 'worlds.live2d.port': 18795 } },
+              { group: { id: 'work', title: '工作接口' }, values: { 'worlds.work.permission': 'ask', 'worlds.work.dshUrl': 'http://127.0.0.1:43120' } },
+            ],
+          }));
+          return;
+        }
+        if (path === '/api/config' && req.method === 'POST') {
+          const parsed = JSON.parse(body) as { group?: string };
+          if (parsed.group !== 'live2d' && parsed.group !== 'work') {
+            res.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: `未知配置组: ${parsed.group}` }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ ok: true }));
+          return;
+        }
         res.writeHead(404).end('not found');
       });
     });
@@ -597,7 +615,7 @@ describe('对话框的控制台代理', () => {
     }
   });
 
-  it('只换端点实例不带 spec;模型目录与运行开关各转各的端点', async () => {
+  it('只换端点实例不带 spec;模型目录与配置组各转各的端点', async () => {
     const fake = await fakeConsole();
     try {
       await start({ consoleUrl: `http://127.0.0.1:${fake.port}` });
@@ -615,8 +633,38 @@ describe('对话框的控制台代理', () => {
         entry.method === 'POST' && entry.path.endsWith('/panels/settings/models')
         && entry.body.includes('"deepseek"'))).toBe(true);
 
-      await fetch(url('/dialog/run'), { method: 'POST', body: '{"action":"pause"}' });
-      expect(fake.seen.some((entry) => entry.method === 'POST' && entry.path === '/api/run/pause')).toBe(true);
+      const write = await fetch(url('/dialog/config'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group: 'work', values: { permission: 'trusted' } }),
+      });
+      expect(await write.json()).toEqual({ ok: true });
+      expect(fake.seen.some((entry) =>
+        entry.method === 'POST' && entry.path === '/api/config'
+        && entry.body.includes('"permission":"trusted"'))).toBe(true);
+    } finally {
+      await closeServer(fake.server);
+    }
+  });
+
+  it('配置组读:只回点名那一组的值;组不在或缺参给能读懂的话', async () => {
+    const fake = await fakeConsole();
+    try {
+      await start({ consoleUrl: `http://127.0.0.1:${fake.port}` });
+      const out = await (await fetch(url('/dialog/config?group=work'))).json();
+      expect(out).toEqual({ values: { 'worlds.work.permission': 'ask', 'worlds.work.dshUrl': 'http://127.0.0.1:43120' } });
+      const missing = await (await fetch(url('/dialog/config?group=nope'))).json() as { error?: unknown };
+      expect(String(missing.error)).toContain('没有 nope 这个配置组');
+      const noGroup = await (await fetch(url('/dialog/config'))).json() as { error?: unknown };
+      expect(String(noGroup.error)).toContain('缺少 group');
+      const badBody = await fetch(url('/dialog/config'), { method: 'POST', body: 'not json' });
+      expect(badBody.status).toBe(400);
+      const noValues = await fetch(url('/dialog/config'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ group: 'work', values: 'ask' }),
+      });
+      expect(noValues.status).toBe(400);
     } finally {
       await closeServer(fake.server);
     }
@@ -648,9 +696,11 @@ describe('对话框的控制台代理', () => {
       }
       controller.abort();
       expect(status).toMatchObject({
-        estTokens: 120000, messageCount: 30, paused: false,
+        estTokens: 120000, messageCount: 30,
         maxTokens: 240000, softRatio: 0.85, hardTokens: 130000,
       });
+      // 运行开关不再走这一帧:权限按钮读的是配置组,帧里没有 paused 这个键。
+      expect(status && 'paused' in status).toBe(false);
     } finally {
       await closeServer(fake.server);
     }
@@ -661,7 +711,8 @@ describe('对话框的控制台代理', () => {
     expect((await fetch(url('/dialog/providers'))).status).toBe(409);
     expect((await fetch(url('/dialog/models?name=x'))).status).toBe(409);
     expect((await fetch(url('/dialog/model'), { method: 'POST', body: '{}' })).status).toBe(409);
-    expect((await fetch(url('/dialog/run'), { method: 'POST', body: '{"action":"pause"}' })).status).toBe(409);
+    expect((await fetch(url('/dialog/config?group=work'))).status).toBe(409);
+    expect((await fetch(url('/dialog/config'), { method: 'POST', body: '{"group":"work","values":{}}' })).status).toBe(409);
     const controller = new AbortController();
     const frame = await firstFrame(controller.signal) as { status: unknown };
     controller.abort();

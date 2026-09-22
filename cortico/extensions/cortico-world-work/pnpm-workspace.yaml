@@ -1,0 +1,5 @@
+# 本包单独装(测试与类型检查)时是自己的安装根;被 extensions/ 收进快照时那边另有根。
+# esbuild 是 vitest 的传递依赖:平台二进制由 @esbuild/win32-x64 自带,postinstall 只是
+# 校验脚本,明确选不构建(构建脚本要 spawn 子进程,在 DSH 沙箱里会被拦)。
+allowBuilds:
+  esbuild: false

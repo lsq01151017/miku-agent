@@ -95,7 +95,8 @@
     ctx: document.getElementById('ctx'),
     ctxFill: document.getElementById('ctx-fill'),
     ctxNum: document.getElementById('ctx-num'),
-    btnRun: document.getElementById('btn-run'),
+    btnPerm: document.getElementById('btn-perm'),
+    permPop: document.getElementById('perm-pop'),
     btnModel: document.getElementById('btn-model'),
     modelPop: document.getElementById('model-pop'),
     btnAttach: document.getElementById('btn-attach'),
@@ -160,8 +161,8 @@
   var attached = [];
   var attachPending = 0;
   var attachNote = '';
-  // 运行开关的真值来自状态帧;没取到过(还没轮询到)时按钮不动作。
-  var runPaused = null;
+  // 权限真值在 work 配置组里(/dialog/config);没取到过时按钮只占位。
+  var permValue = null;
   // 模型选择器:端点清单(/dialog/providers)与各实例的模型目录(/dialog/models)。
   var providerList = null;
   var modelCatalogs = {};
@@ -637,14 +638,16 @@
     return String(Math.round(n));
   }
 
-  /** 权限按钮(运行开关);真值没到过之前只占位,不动作。运行中挂青底,与「拖动」的开关同语言。 */
-  function renderRunChip() {
-    if (!el.btnRun) return;
-    el.btnRun.textContent = runPaused === null ? '权限 —' : (runPaused ? '权限·已暂停' : '权限·运行中');
-    el.btnRun.className = runPaused === null ? '' : (runPaused ? 'paused' : 'running');
-    el.btnRun.title = runPaused === null
-      ? '权限:等状态读数'
-      : (runPaused ? '权限:她停着;点一下继续' : '权限:点一下暂停她');
+  /** 权限按钮:真权限(每次问/放行/关),值在 work 配置组;没取到之前只占位,不动作。 */
+  function renderPermChip() {
+    if (!el.btnPerm) return;
+    var known = permValue === 'ask' || permValue === 'trusted' || permValue === 'off';
+    el.btnPerm.textContent = !known ? '权限 —'
+      : (permValue === 'ask' ? '权限·每次问' : (permValue === 'trusted' ? '权限·已放行' : '权限·已关'));
+    el.btnPerm.className = !known ? '' : (permValue === 'trusted' ? 'trusted' : (permValue === 'off' ? 'off' : ''));
+    el.btnPerm.title = !known ? '权限:还没取到'
+      : (permValue === 'ask' ? '权限:她请 DSH 干活,越出工作区的动作要在 DSH 里点允许'
+        : (permValue === 'trusted' ? '权限:全放行,不再弹审批卡' : '权限:关着,她请不动 DSH'));
   }
 
   /** 状态帧 → 读数行:用量条按预算画,过软预警线变黄、满变红;运行牌子照帧里的画。 */
@@ -665,8 +668,6 @@
       el.ctx.className = ratio >= 1 ? 'danger' : (soft !== null && ratio >= soft ? 'warn' : '');
       el.ctx.title = '她的上下文用量' + (max !== null ? '(预算 ' + fmtCount(max) + ')' : '');
     }
-    runPaused = status.paused === true;
-    renderRunChip();
   }
 
   function postJson(url, body) {
@@ -682,21 +683,39 @@
   }
 
   function bindDialogBar() {
-    if (el.btnRun) {
-      el.btnRun.addEventListener('click', function () {
-        if (runPaused === null) return;   // 还没取到状态,不知道往哪边扳
-        var action = runPaused ? 'resume' : 'pause';
-        postJson('/dialog/run', { action: action }).then(function (out) {
-          if (out && out.ok) {
-            runPaused = !runPaused;   // 先照新值画,下一帧状态来了自然对齐
-            renderRunChip();
-          } else {
-            showSubtitle((out && out.error) || '运行开关失败', true);
+    if (el.btnPerm) {
+      el.btnPerm.addEventListener('click', togglePermPop);
+      // 权限值在 work 配置组里;那个组不在(work 扩展没装)就把按钮收掉。
+      fetch('/dialog/config?group=work', { cache: 'no-store' })
+        .then(function (response) { return response.json(); })
+        .then(function (out) {
+          if (out && out.error) {
+            el.btnPerm.style.display = 'none';
+            return;
           }
-        });
-      });
+          var value = out && out.values && out.values['worlds.work.permission'];
+          if (value === 'ask' || value === 'trusted' || value === 'off') {
+            permValue = value;
+            renderPermChip();
+          }
+        })
+        .catch(function () { /* 取不到先占位;弹层打开时会再取 */ });
     }
     if (el.btnModel) el.btnModel.addEventListener('click', toggleModelPop);
+    if (el.permPop && document.addEventListener) {
+      document.addEventListener('pointerdown', function (event) {
+        if (el.permPop.className.indexOf('on') < 0) return;
+        var target = event.target;
+        if (target === el.btnPerm || target === el.permPop) return;
+        for (var i = 0; i < el.permPop.children.length; i++) {
+          if (el.permPop.children[i] === target) return;
+        }
+        closePermPop();
+      });
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') closePermPop();
+      });
+    }
     if (el.modelPop && document.addEventListener) {
       document.addEventListener('pointerdown', function (event) {
         if (el.modelPop.className.indexOf('on') < 0) return;
@@ -874,6 +893,109 @@
       }
       renderModelPop(name);
       showSubtitle('已切到 ' + name + ' · ' + model, true);
+    });
+  }
+
+  // ── 权限选择单(真权限:每次问/放行/关)──────────────────────────────────
+
+  var PERM_STATES = [
+    { id: 'ask', label: '每次问', hint: '越界动作要在 DSH 里点允许' },
+    { id: 'trusted', label: '放行', hint: '全放行,不弹卡' },
+    { id: 'off', label: '关', hint: '她请不动 DSH' },
+  ];
+  // 配置组的键是 cfg 里的点分路径,不是裸键。
+  var PERM_KEY = 'worlds.work.permission';
+
+  function permLabelOf(value) {
+    for (var i = 0; i < PERM_STATES.length; i++) {
+      if (PERM_STATES[i].id === value) return PERM_STATES[i].label;
+    }
+    return value;
+  }
+
+  function togglePermPop() {
+    if (!el.permPop) return;
+    if (el.permPop.className.indexOf('on') >= 0) {
+      closePermPop();
+      return;
+    }
+    el.permPop.className = 'glass on';
+    refreshPermPop();
+  }
+
+  function closePermPop() {
+    if (el.permPop) el.permPop.className = 'glass';
+  }
+
+  function refreshPermPop() {
+    if (!el.permPop) return;
+    el.permPop.textContent = '';
+    var loading = document.createElement('div');
+    loading.className = 'note';
+    loading.textContent = '取权限…';
+    el.permPop.appendChild(loading);
+    fetch('/dialog/config?group=work', { cache: 'no-store' })
+      .then(function (response) { return response.json(); })
+      .then(function (out) {
+        if (!el.permPop || el.permPop.className.indexOf('on') < 0) return;   // 已经收起
+        if (!out || out.error) {
+          renderPermError((out && out.error) || '取不到');
+          return;
+        }
+        var value = out.values && out.values[PERM_KEY];
+        if (value !== 'ask' && value !== 'trusted' && value !== 'off') {
+          renderPermError('work 配置组里没有 permission 这个值');
+          return;
+        }
+        permValue = value;
+        renderPermChip();
+        renderPermPop();
+      })
+      .catch(function (error) { renderPermError(String(error)); });
+  }
+
+  function renderPermError(message) {
+    if (!el.permPop) return;
+    el.permPop.textContent = '';
+    var note = document.createElement('div');
+    note.className = 'note';
+    note.textContent = message;
+    el.permPop.appendChild(note);
+  }
+
+  function renderPermPop() {
+    if (!el.permPop) return;
+    el.permPop.textContent = '';
+    PERM_STATES.forEach(function (state) {
+      var row = document.createElement('div');
+      row.className = 'mrow' + (permValue === state.id ? ' active' : '');
+      var who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = state.label;
+      var what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = state.hint;
+      row.appendChild(who);
+      row.appendChild(what);
+      row.title = '权限:' + state.label;
+      row.addEventListener('click', function () { setPermission(state.id); });
+      el.permPop.appendChild(row);
+    });
+  }
+
+  /** 写回 work 配置组;控制台按 schema 校验,成了再照新值画。 */
+  function setPermission(value) {
+    var values = {};
+    values[PERM_KEY] = value;
+    postJson('/dialog/config', { group: 'work', values: values }).then(function (out) {
+      if (!out || !out.ok) {
+        showSubtitle((out && out.error) || '改权限失败', true);
+        return;
+      }
+      permValue = value;
+      renderPermChip();
+      renderPermPop();
+      showSubtitle('权限:' + permLabelOf(value), true);
     });
   }
 
