@@ -2,15 +2,17 @@
  * 渲染端:连上 World 的 `/state` 推流,把通道值写到 Live2D 模型上;右下角是同一份数据的数值面板。
  *
  * 分工是清楚的:**World 算通道值**(内部状态 + 词表片段 + 待机动作),这里只做五件事——
- * 把抽象通道名按素材包的 `suggests` 映到模型参数、把突变平滑成动作、在说话时对口型、
- * 让眼睛跟着指针(只眼睛和一点头,不碰身体)、把此刻的数值照实显示出来。
+ * 把抽象通道名按素材包的 `suggests` 映到模型参数、把突变平滑成动作、播放 World 合成的语音
+ * 并让口型跟真实振幅、让眼睛跟着指针(只眼睛和一点头,不碰身体)、把此刻的数值照实显示出来。
  *
- * 口型是按说话时长跑的振荡,**不是音频同步**:没有语音合成就没有音素时间轴,
- * 说成"唇形同步"是撒谎。说话一停它就回到基线。
+ * 口型有两层:语音在放时跟真实音频的振幅(AnalyserNode 逐帧 RMS);没语音在放时回退到按
+ * 说话时长跑的振荡——那是估算,不是同步。说话一停它就回到基线。
  *
  * 缩放、位置、复位是给人用的取景工具:存下来的取景只影响画面,不回写模型,也不进 World。
  *
  * 页面版本随帧下发:与入口注入的不符就自刷新,挂着没刷新的旧标签页重连后自己换成新页面。
+ * 启动失败不闷着:原因写进左下的提示条——取件失败原地隔几秒重试,绘图上下文建不起来
+ * (常见于系统虚拟内存不足)则整页刷新;上下文丢了也走同一条自愈路。
  */
 (function () {
   'use strict';
@@ -43,13 +45,28 @@
   var PAT_REGION_RX = 0.36;
   var PAT_REGION_RY = 0.42;
 
+  /** 语音口型:振幅→开合的增益。语音的 RMS 常在 0.05–0.2,不放大嘴张不开。 */
+  var VOICE_GAIN = 5;
+  /** 开合的时间常数(秒):张嘴快、合嘴稍慢,音节感是这么来的;按时间常数算,与帧率无关。 */
+  var VOICE_ATTACK_TAU_SEC = 0.03;
+  var VOICE_RELEASE_TAU_SEC = 0.09;
+
   /** 底部输入区留多少条历史(收起时只看得到最近一句);字幕在她说完之后留一会儿再淡掉。 */
   var MINE_LINES = 50;
   /** 拖到多远也要留这么多像素的她可见。 */
   var KEEP_VISIBLE_PX = 80;
   var SUBTITLE_MS = 9000;
   var SYSTEM_SUBTITLE_MS = 6000;
+  /**
+   * 启动失败与上下文丢失后的重试间隔(毫秒)。bot 没起来、系统虚拟内存不足,都是等一等
+   * 就好转的事;入口不注入 `__DSH_BOOT_RETRY_MS__`,线上就是这里的默认值,测试用它缩短。
+   */
+  var BOOT_RETRY_MS = Number(window.__DSH_BOOT_RETRY_MS__) || 5000;
   var AGENT_CHAT_PATH = '/agent/chat';
+  /** 语音回执:取到音频就发,World 收到后不再在帧里带这段。 */
+  var VOICE_HEARD_PATH = '/voice/heard';
+  /** 按键发言:录好的音频整段送这里,World 转给转写服务,带回文本。 */
+  var VOICE_HEAR_PATH = '/voice/hear';
   var PANEL_MORE_KEY = 'cortico.live2d.panelMore';
   /** 附图与控制台对话框同一套上限:8 张、长边 2048、单张 6MB(终端通道收 8MB)。 */
   var MAX_IMAGES = 8;
@@ -99,7 +116,9 @@
     permPop: document.getElementById('perm-pop'),
     btnModel: document.getElementById('btn-model'),
     modelPop: document.getElementById('model-pop'),
+    btnVoice: document.getElementById('btn-voice'),
     btnAttach: document.getElementById('btn-attach'),
+    btnMic: document.getElementById('btn-mic'),
     fileInput: document.getElementById('file-input'),
     panelMore: document.getElementById('panel-more'),
     panelMoreButton: document.getElementById('btn-panel'),
@@ -121,6 +140,24 @@
   var current = {};  // 平滑后的当前值
   var speaking = false;
   var speakStart = 0;
+  // 语音:World 合成入队、帧里点名队首,这里取件、按序播放。口型跟真实振幅。
+  var audioCtx = null;
+  var analyser = null;
+  var voiceSamples = null;
+  var voiceSource = null;
+  var voiceLive = false;      // 有语音正在放
+  var voiceQueue = [];        // 解码好待播的语音,按序起声
+  var voiceOpen = 0;          // 平滑后的口型开合(0..1)
+  var lastVoiceId = 0;        // 取过的语音 id:同一段不重播
+  var voiceResetSeen = null;  // 帧里的清队代号;变了就停播清队(她的话被打断)
+  var voiceUnlockHinted = false;  // 没解锁声音的提示只说一次
+  // 按键发言:按住开录,松开停录送转写;转写回来的文本与打字输入走同一条路。
+  var recorder = null;
+  var recordStream = null;
+  var recordChunks = null;
+  var recordMime = 'audio/webm';
+  var micWanted = false;      // 按着:松手后 getUserMedia 才回来就不开录
+  var micBusy = false;        // 转写中:不接新的按下
   // 表情参数:整组开关的清单(每帧先清零),与当前表情要写的值。都由 World 从模型自己的
   // exp3 推导下发,这里不写死参数名。
   var expressionParams = null;
@@ -145,6 +182,8 @@
   var headMeshes = [];
   /** 只启动一次(见 boot)。 */
   var booted = false;
+  // 启动失败或上下文丢失后排下的那一次重试/刷新;挂着时不再排第二个。
+  var bootRetryTimer = null;
   // 眼神跟随:目标来自指针位置,当前值指数逼近它。光标停住超过 LOOK_HOLD_MS,
   // 目标才回到正前方——停着不动的那段时间里,她一直盯着它。
   var look = { x: 0, y: 0, targetX: 0, targetY: 0 };
@@ -163,6 +202,8 @@
   var attachNote = '';
   // 权限真值在 work 配置组里(/dialog/config);没取到过时按钮只占位。
   var permValue = null;
+  // 声音开关的真值随帧来(worlds.live2d.voiceEnabled);没到过时按钮只占位。
+  var voiceOn = null;
   // 模型选择器:端点清单(/dialog/providers)与各实例的模型目录(/dialog/models)。
   var providerList = null;
   var modelCatalogs = {};
@@ -299,10 +340,15 @@
         }
         el.composer.className = 'glass';
         if (!useAgent) openChat();
-        // 走控制台的那三样(用量/模型/权限)没配控制台就不出现;附图与历史、发送不依赖控制台。
+        // 配了转写服务才有「按住说」;没配就收掉。
+        if (info.voice) bindMic();
+        else if (el.btnMic) el.btnMic.style.display = 'none';
+        // 走控制台的那几样(用量/模型/声音/权限)没配控制台就不出现;附图与历史、发送不依赖控制台。
         if (info.console && el.dialogRow) {
           el.dialogRow.className = 'on';
           bindDialogBar();
+          // 配了 TTS 才有「声音」开关:读写经 /dialog/config,真值随帧来。
+          if (info.tts) bindVoiceButton();
         }
       })
       .catch(function () { showSubtitle('取 /pack/chat.json 失败,输入区没开。', true); });
@@ -459,6 +505,190 @@
       } catch (e) { /* 不是 JSON 就整段当文本 */ }
     }
     if (text !== '') appendSubtitle(text);
+  }
+
+  // ── 语音:World 合成入队,这里按序取件播放;口型跟真实振幅 ──────────────────
+
+  /**
+   * 帧里点名了队首没取过的语音:取件、回执、解码进本地待播队列。回执在解码前发——
+   * 取到了就算播过,重连不该再放一遍。取件失败不重试:本连接里帧不会重发同一段,
+   * 重连时它还在队首,那时再取。
+   */
+  function takeVoice(voice) {
+    lastVoiceId = voice.id;
+    fetch(voice.url).then(function (response) {
+      if (!response.ok) return null;   // 已被别的页面回执掉或已清队:静默跳过
+      return response.arrayBuffer();
+    }).then(function (bytes) {
+      if (!bytes) return;
+      fetch(VOICE_HEARD_PATH, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: voice.id }),
+      }).catch(function () { /* 回执没送到也不拦着播 */ });
+      if (!ensureAudio()) return;      // 这个浏览器放不了语音,提示已经说过
+      return audioCtx.decodeAudioData(bytes);
+    }).then(function (buffer) {
+      if (!buffer) return;
+      voiceQueue.push(buffer);
+      pumpVoice();
+    }).catch(function () { showSubtitle('语音取不到。', true); });
+  }
+
+  /** 懒建音频上下文与它的分析器;建不了(没有 AudioContext)说一句并返回 false。 */
+  function ensureAudio() {
+    if (audioCtx) return true;
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) { showSubtitle('这个浏览器放不了语音。', true); return false; }
+    audioCtx = new Ctx();
+    analyser = audioCtx.createAnalyser();
+    analyser.connect(audioCtx.destination);
+    voiceSamples = new Float32Array(analyser.fftSize);
+    // 自动播放策略:没点过页面的 AudioContext 是挂起的;点一下续上,顺带开播待播的。
+    window.addEventListener('pointerdown', function () {
+      if (!audioCtx || audioCtx.state !== 'suspended') return;
+      audioCtx.resume().then(pumpVoice).catch(function () { /* 这次没续上,下次点再说 */ });
+    });
+    return true;
+  }
+
+  /**
+   * 待播队列往前走一格:没在放、有得放、声音解锁了,才起下一段。没解锁时提示只说
+   * 一次,等点过页面由 pointerdown 那条路再来。
+   */
+  function pumpVoice() {
+    if (voiceLive || voiceQueue.length === 0 || !audioCtx) return;
+    if (audioCtx.state === 'suspended') {
+      if (!voiceUnlockHinted) {
+        voiceUnlockHinted = true;
+        showSubtitle('点一下页面,她才能出声。', true);
+      }
+      return;
+    }
+    voiceUnlockHinted = false;
+    startVoice(voiceQueue.shift());
+  }
+
+  /** 起声:接分析器、标记在放。口型从此跟振幅;播完接着播下一段。 */
+  function startVoice(buffer) {
+    stopVoice();
+    var source = audioCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(analyser);
+    source.onended = function () { voiceLive = false; pumpVoice(); };
+    voiceSource = source;
+    voiceLive = true;
+    voiceOpen = 0;
+    try { source.start(0); } catch (e) { voiceLive = false; voiceSource = null; }
+  }
+
+  /** 停掉在放的这一段(清队代号变了走这里);已经自然播完的再停是无害的空操作。 */
+  function stopVoice() {
+    voiceLive = false;
+    voiceOpen = 0;
+    var source = voiceSource;
+    voiceSource = null;
+    if (!source) return;
+    source.onended = null;
+    try { source.stop(); } catch (e) { /* 已经播完 */ }
+    try { source.disconnect(); } catch (e) { /* 同上 */ }
+  }
+
+  // ── 按键发言:按住录音,松开转写发送 ────────────────────────────────────────
+
+  /** 浏览器没有录音 API 就收掉按钮;有才绑按住/松开。 */
+  function bindMic() {
+    if (!el.btnMic) return;
+    if (typeof MediaRecorder !== 'function' || !navigator.mediaDevices
+        || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      el.btnMic.style.display = 'none';
+      return;
+    }
+    el.btnMic.addEventListener('pointerdown', function (event) {
+      if (event && event.preventDefault) event.preventDefault();
+      // 抓住指针:松手在按钮外也收得到 pointerup,录音不会吊着不停。
+      if (el.btnMic.setPointerCapture) {
+        try { el.btnMic.setPointerCapture(event.pointerId); } catch (e) { /* 可选 */ }
+      }
+      startRecording();
+    });
+    var release = function () { stopRecording(); };
+    el.btnMic.addEventListener('pointerup', release);
+    el.btnMic.addEventListener('pointercancel', release);
+  }
+
+  /** 按下:开麦克风、开录。松手早于麦克风就位时,回来即收,不开录。 */
+  function startRecording() {
+    if (micBusy || recorder) return;
+    micWanted = true;
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+      if (!micWanted) {
+        stream.getTracks().forEach(function (track) { track.stop(); });
+        return;
+      }
+      recordStream = stream;
+      recordChunks = [];
+      recorder = new MediaRecorder(stream);
+      recordMime = recorder.mimeType || 'audio/webm';
+      recorder.ondataavailable = function (event) {
+        if (event.data && event.data.size > 0) recordChunks.push(event.data);
+      };
+      recorder.onstop = function () {
+        var blob = new Blob(recordChunks, { type: recordMime });
+        recordChunks = null;
+        if (recordStream) {
+          recordStream.getTracks().forEach(function (track) { track.stop(); });
+          recordStream = null;
+        }
+        setMicState(null);
+        if (blob.size > 0) sendRecording(blob);
+      };
+      recorder.start(250);   // 定时收片:松手时数据都在
+      setMicState('在录…');
+    }).catch(function (error) {
+      micWanted = false;
+      showSubtitle('麦克风打不开:' + (error && error.message ? error.message : error), true);
+    });
+  }
+
+  /** 松手:停录,余下的交给 onstop。 */
+  function stopRecording() {
+    micWanted = false;
+    if (!recorder) return;
+    var active = recorder;
+    recorder = null;
+    if (active.state === 'inactive') return;
+    try { active.stop(); } catch (e) { /* 已经停了 */ }
+  }
+
+  /** 录好的音频送转写;转写回来的文本与打字输入同一条路。 */
+  function sendRecording(blob) {
+    micBusy = true;
+    setMicState('转写中…');
+    blob.arrayBuffer().then(function (buffer) {
+      return fetch(VOICE_HEAR_PATH, {
+        method: 'POST',
+        headers: { 'Content-Type': blob.type },
+        body: buffer,
+      });
+    }).then(function (response) { return response.json(); }).then(function (out) {
+      if (!out || out.error) { showSubtitle((out && out.error) || '没听清。', true); return; }
+      var text = typeof out.text === 'string' ? out.text.trim() : '';
+      if (text === '') { showSubtitle('没听清。', true); return; }
+      say(text);
+    }).catch(function (error) {
+      showSubtitle('转写失败:' + (error && error.message ? error.message : error), true);
+    }).then(function () {
+      micBusy = false;
+      setMicState(null);
+    });
+  }
+
+  /** 牌子照实写此刻在干什么:闲着、在录、转写中。 */
+  function setMicState(label) {
+    if (!el.btnMic) return;
+    el.btnMic.textContent = label || '按住说';
+    el.btnMic.className = label ? 'on' : '';
   }
 
   // ── 对话框四件套:附图、上下文用量、运行开关、模型选择 ────────────────────
@@ -999,6 +1229,43 @@
     });
   }
 
+  // ── 声音开关(她的回复出不出声)──────────────────────────────────────────
+  // 真值是 worlds.live2d.voiceEnabled,随 /state 帧下发;这里只照着画、点一下写回。
+  // 关了 World 就不再调 TTS(字幕照常),排着的段也会被清队代号收掉。
+
+  var VOICE_KEY = 'worlds.live2d.voiceEnabled';
+
+  function bindVoiceButton() {
+    if (!el.btnVoice) return;
+    el.btnVoice.addEventListener('click', function () {
+      if (voiceOn === null) return;   // 真值还没随帧到过:点了也不瞎翻
+      setVoice(!voiceOn);
+    });
+  }
+
+  /** 写回 live2d 配置组;成了照新值画,下一帧带来的真值会再对一遍。 */
+  function setVoice(on) {
+    var values = {};
+    values[VOICE_KEY] = on;
+    postJson('/dialog/config', { group: 'live2d', values: values }).then(function (out) {
+      if (!out || !out.ok) {
+        showSubtitle((out && out.error) || '改声音开关失败', true);
+        return;
+      }
+      voiceOn = on;
+      renderVoiceChip();
+      showSubtitle(on ? '声音:开,她的话会说出来' : '声音:关,只有字幕', true);
+    });
+  }
+
+  function renderVoiceChip() {
+    if (!el.btnVoice) return;
+    el.btnVoice.textContent = voiceOn === null ? '声音 —' : (voiceOn ? '声音·开' : '声音·关');
+    el.btnVoice.className = voiceOn === null ? '' : (voiceOn ? 'on' : 'off');
+    el.btnVoice.title = voiceOn === null ? '声音:还没取到'
+      : (voiceOn ? '声音:她的回复合成语音播放,口型跟真实振幅' : '声音:关着,只有字幕,不调 TTS');
+  }
+
   /** 面板上的取景控件:滑块与拖动都只改 `view`,改完立刻套到模型上。 */
   function bindControls() {
     if (el.zoom) {
@@ -1205,17 +1472,25 @@
   }
 
   /**
-   * 显卡上下文丢了(切标签太久、驱动回收)时,画面会突然变成空白——那看着就是"模型消失了"。
-   * 这里给一句能读懂的话,别让人以为是她坏了。
+   * 显卡上下文丢了(切走标签页太久被回收,或系统虚拟内存不足):画面会空着。给一句
+   * 能读懂的话,并排一次整页刷新——上下文自己恢复了就取消,一直没恢复,新页面就是
+   * 干净的恢复路。别在这里承诺"刷新就回来":内存还打着满的时候,刷新恰恰是再分配
+   * 一次、再失败一次。
    */
   function bindContextLoss() {
     if (!el.canvas || !el.canvas.addEventListener) return;
     el.canvas.addEventListener('webglcontextlost', function (event) {
       if (event && event.preventDefault) event.preventDefault();
-      why('显卡上下文丢了(常见于切走标签页太久),画面会空着。刷新这一页就回来。');
+      why('显卡上下文丢了(常见于切走标签页太久,或系统虚拟内存不足),画面会空着。'
+        + '上下文没自己恢复的话,稍后这一页会自己刷新一次。');
+      scheduleBootReload(BOOT_RETRY_MS * 3);
     });
     el.canvas.addEventListener('webglcontextrestored', function () {
       if (el.why) el.why.style.display = 'none';
+      if (bootRetryTimer !== null) {
+        clearTimeout(bootRetryTimer);
+        bootRetryTimer = null;
+      }
     });
   }
 
@@ -1287,77 +1562,118 @@
     });
   }
 
+  /**
+   * 启动:取通道表、建舞台、载模型、接推流。失败不闷着——原因写进 `#why`,并按失败的
+   * 位置选恢复路:绘图上下文还没建(pack 取件)失败,页面上没有任何半成品,原地隔几秒
+   * 再试,bot 没起来那段时间自己就续上了;建上下文及之后失败(多半是系统虚拟内存不足,
+   * WebGL 分配不到),同一个画布上拆了再建没有意义,整页刷新才是干净的恢复。
+   */
   async function boot() {
     // 只许进一次:脚本万一被加载两次,第二个 PIXI 应用会拿到同一个 canvas 的同一个 WebGL 上下文,
     // 两个舞台各画一个模型——屏幕上就是两个她。
     if (booted) return;
     booted = true;
-    if (typeof PIXI === 'undefined' || !PIXI.live2d || !PIXI.live2d.Live2DModel) {
-      why('播放器库没加载成功:检查 worlds.live2d.webDir 指向的目录里有没有 js/ 下那三个文件。');
-      return;
-    }
-    loadView();
-    buildBars();
+    var staged = false;   // 绘图上下文建起来了吗:之前失败原地重试,之后失败整页刷新
     try {
-      var resp = await fetch('/pack/channels.json', { cache: 'no-store' });
-      var channels = await resp.json();
+      if (typeof PIXI === 'undefined' || !PIXI.live2d || !PIXI.live2d.Live2DModel) {
+        throw new Error('播放器库没加载成功:检查 worlds.live2d.webDir 指向的目录里有没有 js/ 下那三个文件。');
+      }
+      loadView();
+      buildBars();
+      var resp, channels, fixed;
+      try {
+        resp = await fetch('/pack/channels.json', { cache: 'no-store' });
+        channels = await resp.json();
+        fixed = await (await fetch('/pack/overrides.json', { cache: 'no-store' })).json();
+      } catch (e) {
+        throw new Error('取 /pack/channels.json 失败:' + (e && e.message ? e.message : e));
+      }
       Object.keys(channels).forEach(function (channel) {
         var spec = channels[channel] || {};
         if (spec.param) channelParam[channel] = spec.param;
         if (spec.range) channelRange[channel] = spec.range;
       });
-      var fixed = await (await fetch('/pack/overrides.json', { cache: 'no-store' })).json();
       overrides = fixed || {};
-    } catch (e) {
-      why('取 /pack/channels.json 失败:' + e.message);
-      return;
-    }
-    // 摸头的头部网格拿不到就没有这一层,页面其余照常。
-    try {
-      var patPack = await (await fetch('/pack/pat.json', { cache: 'no-store' })).json();
-      headMeshes = (Array.isArray(patPack.headMeshes) ? patPack.headMeshes : []).filter(function (id) {
-        return typeof id === 'string' && id !== '';
-      });
-    } catch (e) { /* 同上 */ }
+      // 摸头的头部网格拿不到就没有这一层,页面其余照常。
+      try {
+        var patPack = await (await fetch('/pack/pat.json', { cache: 'no-store' })).json();
+        headMeshes = (Array.isArray(patPack.headMeshes) ? patPack.headMeshes : []).filter(function (id) {
+          return typeof id === 'string' && id !== '';
+        });
+      } catch (e) { /* 同上 */ }
 
-    app = new PIXI.Application({
-      view: el.canvas,
-      autoStart: true,
-      backgroundAlpha: 0,
-      resizeTo: window,
-      antialias: true,
-    });
-
-    var modelUrl = '/model/' + encodeURIComponent(window.__DSH_MODEL_FILE__ || '');
-    try {
-      // 关掉 pixi 自带的指针交互:眼神跟随我们自己算(见 LOOK_TAU_SEC 那段),否则腰会跟着鼠标转。
-      model = await PIXI.live2d.Live2DModel.from(modelUrl, { autoInteract: false });
+      staged = true;
+      try {
+        app = new PIXI.Application({
+          view: el.canvas,
+          autoStart: true,
+          backgroundAlpha: 0,
+          resizeTo: window,
+          antialias: true,
+        });
+      } catch (e) {
+        throw new Error('绘图上下文建不起来(' + (e && e.message ? e.message : e)
+          + ')。常见原因是系统虚拟内存不足:关掉占内存的程序,或把页面文件上限调大。');
+      }
+      var modelUrl = '/model/' + encodeURIComponent(window.__DSH_MODEL_FILE__ || '');
+      try {
+        // 关掉 pixi 自带的指针交互:眼神跟随我们自己算(见 LOOK_TAU_SEC 那段),否则腰会跟着鼠标转。
+        model = await PIXI.live2d.Live2DModel.from(modelUrl, { autoInteract: false });
+      } catch (e) {
+        throw new Error('模型加载失败:' + (e && e.message ? e.message : e) + '。检查 worlds.live2d.modelDir。');
+      }
+      app.stage.addChild(model);
+      // 刚加载完 scale 是 1,此刻的 width/height 才是模型自己的尺寸,后面都会带上缩放。
+      naturalW = model.width;
+      naturalH = model.height;
+      fitScale = fitScaleFor();
+      model.anchor.set(0.5, 0.5);
+      blinkParams = blinkParameters(model.internalModel);
+      lookParams = resolveLookParams();
+      applyTransform();
+      bindControls();
+      bindPanelMore();
+      bindLook();
+      bindComposer();
+      bindContextLoss();
+      // Cubism 每帧会把参数复位成模型默认值,所以写参数只有一个正确的时刻:模型复位之后、
+      // 更新之前(`beforeModelUpdate`)。自己的 rAF 与模型更新没有固定先后,写早了当帧就被抹掉。
+      if (model.internalModel && typeof model.internalModel.on === 'function') {
+        model.internalModel.on('beforeModelUpdate', writeFrame);
+      }
+      window.addEventListener('resize', fit);
+      // 先接推流再起帧循环:接流失败走整页刷新时,不留下一条还在跑的帧循环。
+      listen();
+      tick();
     } catch (e) {
-      why('模型加载失败:' + e.message + '\n检查 worlds.live2d.modelDir。');
-      return;
+      var message = e && e.message ? e.message : String(e);
+      if (!staged) {
+        why(message + '\n几秒后自己再试。');
+        scheduleBootRetry();
+      } else {
+        why(message + '\n几秒后整页刷新一次;一直不行,就按上面说的先腾出内存。');
+        scheduleBootReload(BOOT_RETRY_MS);
+      }
     }
-    app.stage.addChild(model);
-    // 刚加载完 scale 是 1,此刻的 width/height 才是模型自己的尺寸,后面都会带上缩放。
-    naturalW = model.width;
-    naturalH = model.height;
-    fitScale = fitScaleFor();
-    model.anchor.set(0.5, 0.5);
-    blinkParams = blinkParameters(model.internalModel);
-    lookParams = resolveLookParams();
-    applyTransform();
-    bindControls();
-    bindPanelMore();
-    bindLook();
-    bindComposer();
-    bindContextLoss();
-    // Cubism 每帧会把参数复位成模型默认值,所以写参数只有一个正确的时刻:模型复位之后、
-    // 更新之前(`beforeModelUpdate`)。自己的 rAF 与模型更新没有固定先后,写早了当帧就被抹掉。
-    if (model.internalModel && typeof model.internalModel.on === 'function') {
-      model.internalModel.on('beforeModelUpdate', writeFrame);
-    }
-    window.addEventListener('resize', fit);
-    tick();
-    listen();
+  }
+
+  /** 原地重试:失败发生在绘图上下文之前,页面上没建起任何东西,直接再进一次 boot。 */
+  function scheduleBootRetry() {
+    if (bootRetryTimer !== null) return;
+    bootRetryTimer = setTimeout(function () {
+      bootRetryTimer = null;
+      booted = false;
+      boot();
+    }, BOOT_RETRY_MS);
+  }
+
+  /** 整页刷新:失败发生在绘图上下文及之后,或上下文丢了——新页面才是干净的恢复。 */
+  function scheduleBootReload(delayMs) {
+    if (bootRetryTimer !== null) return;
+    bootRetryTimer = setTimeout(function () {
+      bootRetryTimer = null;
+      window.location.reload();
+    }, delayMs);
   }
 
   /**
@@ -1393,9 +1709,12 @@
     if (!model || !model.internalModel) return;
     var core = model.internalModel.coreModel;
     var mouthOpen = 0;
-    if (speaking) {
+    if (voiceLive) {
+      // 语音在放:口型跟真实振幅,别的来源都不掺和。
+      mouthOpen = voiceOpen;
+    } else if (speaking) {
+      // 回退:没语音在放时按说话时长跑的振荡,是估算不是同步。
       var elapsed = (performance.now() - speakStart) / 1000;
-      // 按音节节奏开合,幅度随说话时长轻微衰减,避免一直大张嘴。
       mouthOpen = Math.max(0, 0.42 + 0.3 * Math.sin(elapsed * 11.5) + 0.1 * Math.sin(elapsed * 27));
     }
     Object.keys(current).forEach(function (channel) {
@@ -1406,9 +1725,9 @@
       if (range) value = Math.min(range[1], Math.max(range[0], value));
       writeParam(core, param, value);
     });
-    // 口型单独写:说话时是自己的振荡,不说话时听 World 的(片段能让她「张嘴」),两者取大的
-    // 那个,所以说话当中被要求张嘴也看得出来。不平滑也不走 current——tick 把 MouthOpen 摘出
-    // 平滑就是为了让它每帧直取帧值:片段的包络自带起落,再平滑一遍会把「张嘴」的峰值磨掉。
+    // 口型单独写:语音在放时跟振幅,没在放时是回退振荡与 World 通道值(片段能让她「张嘴」)
+    // 取大的那个,所以说话当中被要求张嘴也看得出来。不平滑也不走 current——tick 把 MouthOpen
+    // 摘出平滑就是为了让它每帧直取帧值:片段的包络自带起落,再平滑一遍会把「张嘴」的峰值磨掉。
     var mouthParam = channelParam.MouthOpen;
     if (mouthParam) {
       var mouthValue = Math.max(mouthOpen, typeof target.MouthOpen === 'number' ? target.MouthOpen : 0);
@@ -1483,6 +1802,16 @@
     look.x += (look.targetX - look.x) * ease;
     look.y += (look.targetY - look.y) * ease;
 
+    // 语音口型:分析器给这一帧的振幅(RMS),放大后按时间常数逼近——张嘴快、合嘴慢。
+    if (voiceLive && analyser) {
+      analyser.getFloatTimeDomainData(voiceSamples);
+      var sum = 0;
+      for (var i = 0; i < voiceSamples.length; i++) sum += voiceSamples[i] * voiceSamples[i];
+      var targetOpen = Math.min(1, Math.sqrt(sum / voiceSamples.length) * VOICE_GAIN);
+      var tau = targetOpen > voiceOpen ? VOICE_ATTACK_TAU_SEC : VOICE_RELEASE_TAU_SEC;
+      voiceOpen += (targetOpen - voiceOpen) * (1 - Math.exp(-dt / tau));
+    }
+
     Object.keys(target).forEach(function (channel) {
       if (channel === 'MouthOpen') return; // 口型不平滑:每帧直取帧值(见 writeFrame)
       var to = target[channel];
@@ -1522,6 +1851,25 @@
         if (!useAgent) beginSubtitle();
       }
       speaking = nowSpeaking;
+      // 语音:清队代号变了先停播清队(她的话被打断),再取新点名的队首。
+      if (typeof payload.voiceReset === 'number') {
+        if (voiceResetSeen === null) voiceResetSeen = payload.voiceReset;
+        else if (payload.voiceReset !== voiceResetSeen) {
+          voiceResetSeen = payload.voiceReset;
+          stopVoice();
+          voiceQueue.length = 0;
+        }
+      }
+      var voice = payload.voice;
+      if (voice && typeof voice.id === 'number' && voice.id !== lastVoiceId
+          && typeof voice.url === 'string' && voice.url !== '') {
+        takeVoice(voice);
+      }
+      // 声音开关真值随帧来:控制台那一页改了,这里的牌子跟着变。
+      if (typeof payload.voiceOn === 'boolean') {
+        voiceOn = payload.voiceOn;
+        renderVoiceChip();
+      }
       showState(payload);
       renderStatus(payload.status);
     };

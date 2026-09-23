@@ -74,6 +74,47 @@ export interface Live2DConfigSection extends WorldSection {
    * (`data:` 每段一段文本或 JSON)也行,一次性 JSON/纯文本也行。留空就只走控制台那一路。
    */
   agentUrl: string;
+  /**
+   * TTS 服务地址(GPT-SoVITS api_v2),例如 `http://127.0.0.1:9880`。
+   *
+   * 填了它,`POST /voice/say` 就把一段文本合成成语音:音频经 `/state` 帧交给页面播放,
+   * 口型跟真实振幅走。留空 = 语音关着,口型回退到按时长的振荡。
+   */
+  ttsUrl: string;
+  /**
+   * 她的回复出不出声。关了就不调 TTS(字幕照常,口型回退到按时长的振荡),形象页
+   * 对话框的「声音」按钮与控制台这一页改的是同一个值。
+   */
+  voiceEnabled: boolean;
+  /** 参考音频在 TTS 服务那台机器上的路径(api_v2 的 `ref_audio_path`);音色从这段参考来。 */
+  ttsRefAudioFile: string;
+  /** 参考音频说的话(api_v2 的 `prompt_text`),与参考音频逐字对应。 */
+  ttsPromptText: string;
+  /** 参考音频的语言(api_v2 的 `prompt_lang`,语言码如 `ja`/`zh`)。 */
+  ttsPromptLang: string;
+  /**
+   * 合成文本的默认语言(api_v2 的 `text_lang`);`/voice/say` 请求里可用 `lang` 覆盖。
+   * `auto` 让服务端按片判语言——她的回复中日混说都对;钉死一种语言时,另一种语言的
+   * 汉字会被按钉死的语言念出来(api_v2 的既定行为)。
+   */
+  ttsTextLang: string;
+  /**
+   * 语音翻译服务地址,例如 `http://127.0.0.1:9882`。填了它,每段语音先经
+   * `POST <地址>/translate`(JSON `{ text }` 回 `{ text }`)翻成目标语言再合成;
+   * 字幕不受影响,始终显示原文。翻不出来就用原文合成,不静音。
+   */
+  ttsTranslateUrl: string;
+  /** 一段语音至少这么多字才合成;不足时与后面的句子合并(省一次合成调用)。 */
+  voiceSegmentMinChars: number;
+  /** 一段语音至多这么多字;到了就切,从上限回溯找句界。 */
+  voiceSegmentMaxChars: number;
+  /**
+   * 语音转写服务地址,例如 `http://127.0.0.1:9881`。
+   *
+   * 填了它,形象页的输入区多一枚「按住说」:按住录音,松开把音频经本 World 转给服务,
+   * 转写回来的文本与打字输入走同一条路。留空 = 没有这一枚。
+   */
+  asrUrl: string;
 }
 
 export const LIVE2D_DEFAULTS: Live2DConfigSection = {
@@ -94,6 +135,16 @@ export const LIVE2D_DEFAULTS: Live2DConfigSection = {
   idleAmount: 1,
   consoleUrl: '',
   agentUrl: '',
+  ttsUrl: '',
+  voiceEnabled: true,
+  ttsRefAudioFile: '',
+  ttsPromptText: '',
+  ttsPromptLang: '',
+  ttsTextLang: 'auto',
+  ttsTranslateUrl: '',
+  voiceSegmentMinChars: 8,
+  voiceSegmentMaxChars: 120,
+  asrUrl: '',
 };
 
 export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
@@ -209,6 +260,69 @@ export const LIVE2D_CONFIG_GROUP: ConfigGroup = {
         title: '外部 Agent 地址',
         description: '例如 http://127.0.0.1:8790。填了它,形象页的输入就送给这个 Agent,'
           + '它吐回来的文本当字幕显示并驱动她的动作。约定:POST <地址>/agent/chat,JSON { message }。',
+      },
+      'worlds.live2d.ttsUrl': {
+        type: 'string',
+        title: 'TTS 服务地址',
+        description: '例如 http://127.0.0.1:9880(GPT-SoVITS api_v2)。填了它,POST /voice/say '
+          + '能把文本合成成语音,页面播放时口型跟真实振幅走;留空则口型按说话时长估算。',
+      },
+      'worlds.live2d.voiceEnabled': {
+        type: 'boolean',
+        title: '她的回复出声',
+        description: '开着:回复按句界合成语音,页面播放,口型跟真实振幅。关了:不调 TTS,'
+          + '只有字幕,口型按说话时长估算。形象页对话框的「声音」按钮改的就是这个值。',
+      },
+      'worlds.live2d.ttsRefAudioFile': {
+        type: 'string',
+        title: '参考音频路径',
+        description: '参考音频在 TTS 服务那台机器上的路径(api_v2 的 ref_audio_path),音色从这段参考来。',
+      },
+      'worlds.live2d.ttsPromptText': {
+        type: 'string',
+        title: '参考音频文本',
+        description: '参考音频说的话(api_v2 的 prompt_text),与参考音频逐字对应。',
+      },
+      'worlds.live2d.ttsPromptLang': {
+        type: 'string',
+        title: '参考音频语言',
+        description: '参考音频的语言(api_v2 的 prompt_lang),语言码如 ja/zh。',
+      },
+      'worlds.live2d.ttsTextLang': {
+        type: 'string',
+        title: '合成文本语言',
+        description: '合成文本的默认语言(api_v2 的 text_lang),语言码如 auto/zh/ja;'
+          + 'auto 按片判语言,中日混说都对。/voice/say 请求里可用 lang 覆盖。',
+      },
+      'worlds.live2d.ttsTranslateUrl': {
+        type: 'string',
+        title: '语音翻译服务地址',
+        description: '例如 http://127.0.0.1:9882。填了它,每段语音先翻成目标语言再合成,'
+          + '字幕不受影响;翻不出来就用原文合成。约定:POST <地址>/translate,'
+          + 'JSON { text } 回 { text }。',
+      },
+      'worlds.live2d.voiceSegmentMinChars': {
+        type: 'integer',
+        title: '语音分段下限',
+        minimum: 1,
+        maximum: 500,
+        'x-suffix': '字',
+        description: '她的回复按句界切成一段一段合成;不足这个字数的句子与后面合并,省一次合成调用。',
+      },
+      'worlds.live2d.voiceSegmentMaxChars': {
+        type: 'integer',
+        title: '语音分段上限',
+        minimum: 16,
+        maximum: 2000,
+        'x-suffix': '字',
+        description: '一段最多这么多字;到了就切,从上限回溯找句界。小段首响应快,大段合成调用少。',
+      },
+      'worlds.live2d.asrUrl': {
+        type: 'string',
+        title: '语音转写服务地址',
+        description: '例如 http://127.0.0.1:9881。填了它,形象页的输入区多一枚「按住说」:'
+          + '按住录音,松开转写成文本,与打字输入走同一条路。约定:POST <地址>/asr,'
+          + '请求体是原始音频,回 JSON { text }。',
       },
     },
   },

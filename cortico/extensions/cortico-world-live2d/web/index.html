@@ -141,13 +141,16 @@
   #dialog-row button:active { transform: translate(2px, 2px); box-shadow: 0 0 0 rgba(10, 14, 26, 0.85); }
   #btn-attach { flex: none; }
   #btn-attach svg { display: block; width: 15px; height: 15px; }
+  /* 按住说话:录音与转写中都挂青底,牌子写明此刻在干什么。 */
+  #btn-mic { flex: none; }
+  #btn-mic.on { background: var(--pop-cyan); }
   #btn-model {
     max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* 没配控制台时,走控制台的那三样(用量/模型/权限)整块不出现。 */
-  #dialog-row #ctx, #dialog-row #btn-model, #dialog-row #btn-perm { display: none; }
+  /* 没配控制台时,走控制台的那几样(用量/模型/声音/权限)整块不出现。 */
+  #dialog-row #ctx, #dialog-row #btn-model, #dialog-row #btn-voice, #dialog-row #btn-perm { display: none; }
   #dialog-row.on #ctx { display: inline-flex; }
-  #dialog-row.on #btn-model, #dialog-row.on #btn-perm { display: inline-block; }
+  #dialog-row.on #btn-model, #dialog-row.on #btn-voice, #dialog-row.on #btn-perm { display: inline-block; }
   #ctx { align-items: center; gap: 6px; min-width: 0; padding: 0 2px; }
   #ctx-bar {
     flex: none; width: 64px; height: 8px; overflow: hidden;
@@ -160,6 +163,9 @@
   /* 权限按钮按态挂色:放行是青底(与「拖动:开」同一套),关是暖色描边,每次问是默认白牌。 */
   #btn-perm.trusted { background: var(--pop-cyan); }
   #btn-perm.off { color: #a3471f; border-color: #a3471f; }
+  /* 声音按钮同一套语言:开着青底,关着暖色描边。 */
+  #btn-voice.on { background: var(--pop-cyan); }
+  #btn-voice.off { color: #a3471f; border-color: #a3471f; }
 
   /* 拖图进输入区:墨线换成虚线,松手或拖出复原。 */
   #composer.dragover { border-style: dashed; }
@@ -291,10 +297,12 @@
           <path d="m4 17.5 5-4.5 3.5 3 3-2.5 4.5 4"/>
         </svg>
       </button>
+      <button id="btn-mic" type="button" title="按住说话,松开转写发送" aria-label="按住说话">按住说</button>
       <span id="ctx" title="她的上下文用量"><span id="ctx-bar"><i id="ctx-fill"></i></span><b id="ctx-num">—</b></span>
       <span class="grow"></span>
       <button id="btn-history" type="button" title="展开我发过的话">历史</button>
       <button id="btn-model" type="button" title="换她跑在哪个模型上">模型 —</button>
+      <button id="btn-voice" type="button" title="她的回复出不出声">声音 —</button>
       <button id="btn-perm" type="button" title="她请 DSH 干活的权限">权限 —</button>
       <button type="submit">说</button>
     </div>

@@ -13,7 +13,9 @@
  * 本 World 自己起一个小 HTTP 服务,`/state` 用 SSE 推通道值,页面把它写到模型参数上。
  * 不碰控制台前端,是因为改控制台要重建 Web 产物,而重建必须在没有 bot 活着的时候做。
  *
- * 口型是按说话时长跑的振荡,不是音频同步:没有语音合成就没有音素时间轴。
+ * 语音走 TTS 服务(配置 `ttsUrl`):她的话按句界切段、逐段合成入队,音频经 `/state` 帧
+ * 交给页面按序播放,口型跟真实振幅;打断与最后一页断连即清队。没配或没在放时,
+ * 页面回退到按说话时长估的振荡。
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
@@ -39,6 +41,7 @@ import { loadPack, type Pack } from './pack.ts';
 import { cueExpression, missingCueExpressions, type ExpressionCue, type ExpressionStaging } from './directives.ts';
 import { expressionForMood, missingExpressions, MOOD_EXPRESSIONS } from './expressions.ts';
 import { Performance } from './performance.ts';
+import { VoiceSegmenter } from './voice.ts';
 import { LIVE2D_CONFIG_GROUP, type Live2DConfigSection } from './config.ts';
 
 const WEB_DIR = fileURLToPath(new URL('../web/', import.meta.url));
@@ -75,6 +78,22 @@ const TERMINAL_CHAT_PATH = '/ws/providers/world%3Aterminal/panels/chat';
 const AGENT_CHAT_PATH = '/agent/chat';
 /** 摸头的入口:页面按住左键在她头上时打这里,active 带心跳续期。 */
 const PAT_PATH = '/pat';
+/** 语音三件套:手动合成入口、音频取件与播放回执。回执后队首出队,重连不重播。 */
+const VOICE_SAY_PATH = '/voice/say';
+const VOICE_CLIP_PATH = '/voice/clip/';
+const VOICE_HEARD_PATH = '/voice/heard';
+/** 按键发言的入口:页面把录的音频整段送来,这里转给转写服务。 */
+const VOICE_HEAR_PATH = '/voice/hear';
+/** 转写上限:一分钟的话在 opus/webm 里不过几百 KB,20MB 够长篇大论。 */
+const HEAR_MAX_BYTES = 20_000_000;
+/** 队列上限:页面取件是即时的,攒到这个数说明没有页面在消费,新段丢弃并报一次。 */
+const VOICE_QUEUE_CAP = 24;
+/** 合成上限:热身后的句长不过几秒,卡死的服务不该把请求吊到天荒地老。 */
+const TTS_TIMEOUT_MS = 60_000;
+/** 翻译上限:一次 LLM 调用句长不过几秒,超了就回退原文合成,别把整条合成链吊死。 */
+const TRANSLATE_TIMEOUT_MS = 20_000;
+/** 转写上限:同上。 */
+const ASR_TIMEOUT_MS = 60_000;
 /** 对话框四件套(上下文用量/模型/权限)的控制台代理入口;权限读写走配置组那一对。 */
 const DIALOG_PROVIDERS_PATH = '/dialog/providers';
 const DIALOG_MODELS_PATH = '/dialog/models';
@@ -147,6 +166,25 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
   });
 }
 
+/** 读一个原始请求体(按键发言的音频);超过上限当作坏请求。 */
+function readRawBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  return new Promise((done, fail) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        fail(new Error('请求体太大'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => { done(Buffer.concat(chunks)); });
+    req.on('error', fail);
+  });
+}
+
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -211,6 +249,22 @@ export class Live2DWorld implements World {
   private modelExpressions: Set<string> = new Set();
   /** 说到什么时候为止:按字数估的时长,不是音频同步。 */
   private speakingUntilMs = 0;
+  /**
+   * 合成好待播的语音队列:她的回复按句界切段、逐段合成入队,页面按序取件播放。
+   * 帧里带队首的取件地址,页面取到并回执后出队;打断与最后一页断连时整队清掉
+   * (`voiceReset` 随之递增,页面据此停播清队)。没回执前重连的页面会再取——
+   * 队首那段确实还没播过。
+   */
+  private voiceQueue: Array<{ id: number; bytes: Buffer }> = [];
+  private voiceSeq = 0;
+  /** 每清一次队递增;帧里带给页面,页面看到变化就停掉在放的、丢掉待播的。 */
+  private voiceReset = 0;
+  /** 打断代数:清队时递增,在途的合成结果按它作废,不再入队。 */
+  private voiceGen = 0;
+  /** 合成串行链:段与段保序,上一段合成完才轮到下一段。 */
+  private voiceChain: Promise<void> = Promise.resolve();
+  /** 回复流的分段器;起服务时按配置建。 */
+  private segmenter: VoiceSegmenter | null = null;
   /** 包里的措辞 → 表情指令表。 */
   private cues: readonly ExpressionCue[] = [];
   /** 表情 → 伴随片段;挂载时滤掉这份模型没有的表情。 */
@@ -293,6 +347,10 @@ export class Live2DWorld implements World {
     const spanMs = Math.max(this.cfg.speechTailMs, chars * this.cfg.speechMsPerChar);
     this.speakingUntilMs = Math.max(this.speakingUntilMs, nowMs) + spanMs;
     this.performance?.speak(text, nowMs);
+    // 语音:切出完整句就送去合成。有没有页面在看由入队那一层把关——没人看就没有"说出去"。
+    if (this.segmenter !== null) {
+      for (const segment of this.segmenter.push(text)) void this.enqueueVoice(segment);
+    }
 
     this.spokenText = (this.spokenText + text).slice(-SPOKEN_WINDOW_CHARS);
     if (this.cfg.expressionHoldMs <= 0) return;
@@ -387,10 +445,12 @@ export class Live2DWorld implements World {
        */
       externalizes: (event) =>
         event.type === 'response.output_text.delta' && (event.delta ?? '') !== '' && this.clients.size > 0,
-      // 一轮结束不立刻闭嘴:她常常分几轮说话,尾巴由 `speechTailMs` 收,免得每轮之间抽一下。
-      onRoundEnd: () => {},
+      // 一轮结束把说剩的尾巴也送进合成;说话标志不立刻闭嘴——她常常分几轮说话,
+      // 标志的尾巴由 `speechTailMs` 收,免得每轮之间抽一下。
+      onRoundEnd: () => this.flushVoice(),
       onAbort: () => {
         this.speakingUntilMs = 0;
+        this.clearVoice();
         this.performance?.clear();
       },
     };
@@ -403,6 +463,10 @@ export class Live2DWorld implements World {
       stateHoldMs: this.cfg.stateHoldMs,
       stateFadeMs: this.cfg.stateFadeMs,
       idleAmount: this.cfg.idleAmount,
+    });
+    this.segmenter = new VoiceSegmenter({
+      minChars: this.cfg.voiceSegmentMinChars,
+      maxChars: this.cfg.voiceSegmentMaxChars,
     });
     // 先摆成中性:形象不该在她推来第一份状态之前是一张空表,渲染端拿不到通道就没法复位。
     this.performance.setBaseline(baselineChannels(this.pendingEmotion ?? EMOTION_BASELINE));
@@ -837,6 +901,219 @@ export class Live2DWorld implements World {
     this.performance?.setPat(null);
   }
 
+  // ── 语音 ────────────────────────────────────────────────────────────────────
+
+  /**
+   * 一段文本入队:走串行合成链(段与段保序),合成完才进队列,帧里带队首的取件地址。
+   * 没配 TTS、没有页面在看或队列已满就丢弃并说明原因;打断代数变了,在途结果作废。
+   */
+  private enqueueVoice(text: string, lang?: string): Promise<{ ok: true; id: number } | { ok: false; error: string }> {
+    if (text === '') return Promise.resolve({ ok: false, error: '没有要合成的话' });
+    if (this.cfg.ttsUrl.trim() === '') return Promise.resolve({ ok: false, error: '没有配 worlds.live2d.ttsUrl' });
+    if (!this.cfg.voiceEnabled) return Promise.resolve({ ok: false, error: '声音开关关着' });
+    if (this.clients.size === 0) return Promise.resolve({ ok: false, error: '没有页面连着,说了也没人听见' });
+    const gen = this.voiceGen;
+    return new Promise((resolve) => {
+      this.voiceChain = this.voiceChain.then(async () => {
+        if (gen !== this.voiceGen) { resolve({ ok: false, error: '这段还没合成完就被打断了' }); return; }
+        try {
+          let spoken = text;
+          if (this.cfg.ttsTranslateUrl.trim() !== '') {
+            try {
+              spoken = await this.translateVoice(text);
+            } catch (error) {
+              const detail = String(error instanceof Error ? error.message : error);
+              this.host?.log.warn('语音翻译失败,这一段用原文合成', { err: detail });
+            }
+          }
+          const bytes = await this.synthesizeVoice(spoken, lang ?? this.cfg.ttsTextLang);
+          if (gen !== this.voiceGen) { resolve({ ok: false, error: '这段还没合成完就被打断了' }); return; }
+          if (this.voiceQueue.length >= VOICE_QUEUE_CAP) {
+            this.host?.log.warn('语音队列满了,新段丢弃', { queued: this.voiceQueue.length });
+            resolve({ ok: false, error: '语音队列满了' });
+            return;
+          }
+          const id = ++this.voiceSeq;
+          this.voiceQueue.push({ id, bytes });
+          resolve({ ok: true, id });
+        } catch (error) {
+          const detail = String(error instanceof Error ? error.message : error);
+          if (gen === this.voiceGen) {
+            this.host?.log.warn('语音合成失败,这一段只有字幕没有声音', { err: detail });
+          }
+          resolve({ ok: false, error: `语音合成失败:${detail}` });
+        }
+      });
+    });
+  }
+
+  /** 轮末冲刷:说剩的尾巴也送进合成(没有尾巴就是空操作)。 */
+  private flushVoice(): void {
+    const tail = this.segmenter?.flush();
+    if (tail) void this.enqueueVoice(tail);
+  }
+
+  /** 打断、交出话语权、最后一页断连:整队清掉,在途合成作废,页面跟着停播。 */
+  private clearVoice(): void {
+    this.voiceGen++;
+    this.voiceReset++;
+    this.voiceQueue.length = 0;
+    this.segmenter?.clear();
+  }
+
+  /**
+   * 把一段要出声的话先交给翻译服务。约定同 TTS/转写:POST JSON、回 JSON,出错回
+   * `message`。翻不出来由调用方回退原文,这里只管把原因带出来。
+   */
+  private async translateVoice(text: string): Promise<string> {
+    const base = this.cfg.ttsTranslateUrl.trim().replace(/\/+$/, '');
+    const response = await fetch(`${base}/translate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(TRANSLATE_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const error = await response.json() as { message?: unknown };
+        if (typeof error.message === 'string' && error.message !== '') detail = error.message;
+      } catch { /* 非 JSON 的错误体就用状态码 */ }
+      throw new Error(detail);
+    }
+    const payload = await response.json() as { text?: unknown };
+    if (typeof payload.text !== 'string' || payload.text === '') {
+      throw new Error('翻译服务没带回文本');
+    }
+    return payload.text;
+  }
+
+  /**
+   * 调 TTS 服务合成一段。api_v2 收 JSON、非流式回 `audio/wav`;出错回 JSON 带 `message`,
+   * 把它带出来。
+   */
+  private async synthesizeVoice(text: string, lang: string): Promise<Buffer> {
+    const base = this.cfg.ttsUrl.trim().replace(/\/+$/, '');
+    const response = await fetch(`${base}/tts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        text_lang: lang,
+        ref_audio_path: this.cfg.ttsRefAudioFile,
+        prompt_text: this.cfg.ttsPromptText,
+        prompt_lang: this.cfg.ttsPromptLang,
+        media_type: 'wav',
+        streaming_mode: false,
+      }),
+      signal: AbortSignal.timeout(TTS_TIMEOUT_MS),
+    });
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!response.ok || !contentType.includes('audio/')) {
+      let detail = `HTTP ${response.status}`;
+      try {
+        const error = await response.json() as { message?: unknown };
+        if (typeof error.message === 'string' && error.message !== '') detail = error.message;
+      } catch { /* 非 JSON 的错误体就用状态码 */ }
+      throw new Error(detail);
+    }
+    return Buffer.from(await response.arrayBuffer());
+  }
+
+  /**
+   * 手动合成一段语音:与自动分段同一条合成链,排在在途的段之后。没配 TTS 或没有
+   * 页面在看就明确回绝。
+   */
+  private async receiveVoiceSay(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    if (this.cfg.ttsUrl.trim() === '') {
+      res.writeHead(409, { 'Content-Type': 'text/plain; charset=utf-8' }).end('没有配 worlds.live2d.ttsUrl');
+      return;
+    }
+    if (this.clients.size === 0) {
+      res.writeHead(409, { 'Content-Type': 'text/plain; charset=utf-8' }).end('没有页面连着,说了也没人听见');
+      return;
+    }
+    let body: { text?: unknown; lang?: unknown };
+    try {
+      body = await readJsonBody(req) as { text?: unknown; lang?: unknown };
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('请求体不是 JSON');
+      return;
+    }
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    if (text === '') {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('缺少 text');
+      return;
+    }
+    const lang = typeof body.lang === 'string' && body.lang !== '' ? body.lang : undefined;
+    const out = await this.enqueueVoice(text, lang);
+    if (out.ok) this.sendJson(res, { ok: true, id: out.id });
+    else this.sendJson(res, { error: out.error });
+  }
+
+  /** 取件:队列里正好有这个 id 才发;别的 id 或已出队的都 404,页面静默跳过。 */
+  private sendVoiceClip(url: URL, res: ServerResponse): void {
+    const id = Number(url.pathname.slice(VOICE_CLIP_PATH.length));
+    const clip = Number.isInteger(id) ? this.voiceQueue.find((entry) => entry.id === id) : undefined;
+    if (clip === undefined) {
+      res.writeHead(404).end('not found');
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'audio/wav', 'Cache-Control': 'no-store' }).end(clip.bytes);
+  }
+
+  /** 播放回执:页面取到了队首这段,出队;不是队首的回执(旧帧的迟到回执)不动队列。 */
+  private async receiveVoiceHeard(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let body: { id?: unknown };
+    try {
+      body = await readJsonBody(req) as { id?: unknown };
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('请求体不是 JSON');
+      return;
+    }
+    if (this.voiceQueue[0]?.id === body.id) this.voiceQueue.shift();
+    this.sendJson(res, { ok: true });
+  }
+
+  /**
+   * 按键发言:页面把录的音频整段送来,原样转给转写服务,把转写文本带回去。转写出来的
+   * 话怎么进对话由页面决定——它与打字输入走同一条路,这里只做转写代理。
+   */
+  private async receiveVoiceHear(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const base = this.cfg.asrUrl.trim().replace(/\/+$/, '');
+    if (base === '') {
+      res.writeHead(409, { 'Content-Type': 'text/plain; charset=utf-8' }).end('没有配 worlds.live2d.asrUrl');
+      return;
+    }
+    let bytes: Buffer;
+    try {
+      bytes = await readRawBody(req, HEAR_MAX_BYTES);
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' }).end('请求体太大');
+      return;
+    }
+    try {
+      const response = await fetch(`${base}/asr`, {
+        method: 'POST',
+        headers: { 'Content-Type': String(req.headers['content-type'] ?? 'application/octet-stream') },
+        body: bytes,
+        signal: AbortSignal.timeout(ASR_TIMEOUT_MS),
+      });
+      if (!response.ok) {
+        let detail = `HTTP ${response.status}`;
+        try {
+          const error = await response.json() as { message?: unknown };
+          if (typeof error.message === 'string' && error.message !== '') detail = error.message;
+        } catch { /* 非 JSON 的错误体就用状态码 */ }
+        throw new Error(detail);
+      }
+      const out = await response.json() as { text?: unknown };
+      this.sendJson(res, { text: typeof out.text === 'string' ? out.text : '' });
+    } catch (error) {
+      this.sendJson(res, { error: `语音转写失败:${String(error instanceof Error ? error.message : error)}` });
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.pushTimer) clearInterval(this.pushTimer);
     this.pushTimer = null;
@@ -857,6 +1134,7 @@ export class Live2DWorld implements World {
     const server = this.server;
     this.server = null;
     this.boundPort = 0;
+    this.clearVoice();
     this.performance = null;
     this.host = null;
     if (server) await new Promise<void>((done) => server.close(() => done()));
@@ -869,6 +1147,7 @@ export class Live2DWorld implements World {
   }
 
   onHandoffEnded(): void {
+    this.clearVoice();
     this.performance?.clear();
   }
 
@@ -953,11 +1232,16 @@ export class Live2DWorld implements World {
       } else {
         send(agentDelta(await upstream.text()));
       }
+      // Agent 的回复不走 Core 的 outputTap,没有轮末钩子:流到这里就是"说完了",
+      // 把分段器里剩下的尾巴也送进合成。
+      this.flushVoice();
       try {
         res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
         res.end();
       } catch { /* 页面已经走了 */ }
     } catch (error) {
+      // 半路断掉:已经说出口的部分照样把尾巴合成出去。
+      this.flushVoice();
       this.host?.log.warn('转给外部 Agent 失败', { url: target, err: String(error) });
       try {
         res.write(`data: ${JSON.stringify({ error: `连不上外部 Agent:${String(error)}` })}\n\n`);
@@ -976,6 +1260,18 @@ export class Live2DWorld implements World {
     }
     if (req.method === 'POST' && url.pathname === PAT_PATH) {
       this.receivePat(req, res);
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === VOICE_SAY_PATH) {
+      void this.receiveVoiceSay(req, res);
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === VOICE_HEARD_PATH) {
+      void this.receiveVoiceHeard(req, res);
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === VOICE_HEAR_PATH) {
+      void this.receiveVoiceHear(req, res);
       return;
     }
     if (req.method === 'POST' && url.pathname === DIALOG_MODEL_PATH) {
@@ -1015,6 +1311,10 @@ export class Live2DWorld implements World {
           agent: this.agentUrl() !== null,
           // 对话框的读数与开关都走控制台:没配控制台,那一栏整个不出现。
           console: this.cfg.consoleUrl !== '',
+          // 配了 TTS,对话框多一枚「声音」开关(值经 /dialog/config 读写,真值随帧下发)。
+          tts: this.cfg.ttsUrl.trim() !== '',
+          // 配了转写服务,输入区多一枚「按住说」。
+          voice: this.cfg.asrUrl.trim() !== '',
         });
       }
       if (url.pathname === '/pack/expressions.json') {
@@ -1028,6 +1328,7 @@ export class Live2DWorld implements World {
         });
       }
       if (url.pathname === '/state') return this.openStream(res);
+      if (url.pathname.startsWith(VOICE_CLIP_PATH)) return this.sendVoiceClip(url, res);
       if (url.pathname.startsWith('/lib/')) {
         return this.sendFile(res, this.underRoot(this.resolveDir(this.cfg.webDir, '播放器库'), url.pathname.slice('/lib/'.length)));
       }
@@ -1098,6 +1399,8 @@ export class Live2DWorld implements World {
     res.on('close', () => {
       clearInterval(keepalive);
       this.clients.delete(res);
+      // 最后一页也走了:没有"说出去"这回事,清队停播,重连不补旧话。
+      if (this.clients.size === 0) this.clearVoice();
     });
   }
 
@@ -1122,6 +1425,8 @@ export class Live2DWorld implements World {
     // 当前表情要写的参数值:页面每帧先清零整组开关,再写这一份。
     const expressionValues: Record<string, number> = {};
     for (const { id, value } of this.expressionTable.get(expression ?? '') ?? []) expressionValues[id] = value;
+    // 声音开关刚关上:排着没播的段收掉(页面看到清队代号即停播),正在放的那一句让它播完。
+    if (!this.cfg.voiceEnabled && this.voiceQueue.length > 0) this.clearVoice();
     return JSON.stringify({
       channels,
       // 表情与通道写的是不相交的参数组,渲染端两样都照做。
@@ -1129,7 +1434,15 @@ export class Live2DWorld implements World {
       // 表情参数由页面每帧写:先清零这一组(所有表情共用的开关),再写当前那张的值。
       expressionParams: this.expressionParams,
       expressionValues,
-      speaking: nowMs < this.speakingUntilMs,
+      // 说话标志:字数估的时长之内,或还有合成好的段没播出去。
+      speaking: nowMs < this.speakingUntilMs || this.voiceQueue.length > 0,
+      // 语音:队首的取件地址(页面按序取件播放),与清队代号(变了页面就停播清队)。
+      voice: this.voiceQueue.length > 0
+        ? { id: this.voiceQueue[0]!.id, url: `${VOICE_CLIP_PATH}${this.voiceQueue[0]!.id}` }
+        : null,
+      voiceReset: this.voiceReset,
+      // 声音开关的真值:页面的「声音」按钮照它画,控制台那一页改了这里跟着变。
+      voiceOn: this.cfg.voiceEnabled,
       // 面板要的那几个数:六个情绪维度、离散心情、此刻做着的片段。
       // 页面拿它们做数值展示,不必再开一条通道。
       emotion: this.emotion,

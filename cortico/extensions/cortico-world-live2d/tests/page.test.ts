@@ -53,6 +53,10 @@ function stubBrowser(): {
   fireDocument: (type: string, event: Record<string, unknown>) => void;
   /** 跑 n 帧:每帧先走页面的 requestAnimationFrame,再走模型的 beforeModelUpdate。 */
   pump: (frames: number) => void;
+  /** 设定分析器回的振幅(整缓冲填同一个值):驱动口型的"真实音频"。 */
+  setVoicePattern: (level: number) => void;
+  /** 触发当前语音的 onended(自然播完)。 */
+  endVoice: () => void;
 } {
   const written: Written[] = [];
   const scales: number[] = [];
@@ -139,7 +143,7 @@ function stubBrowser(): {
 
   const globals = globalThis as Record<string, unknown>;
   // 这些全局会一直被后面的测试文件用到:进来之前先存一份,跑完原样还回去。
-  for (const key of ['document', 'window', 'requestAnimationFrame', 'PIXI', 'fetch', 'EventSource', 'performance', 'WebSocket', 'FileReader']) {
+  for (const key of ['document', 'window', 'requestAnimationFrame', 'PIXI', 'fetch', 'EventSource', 'performance', 'WebSocket', 'FileReader', 'navigator', 'MediaRecorder']) {
     if (!saved.has(key)) saved.set(key, globals[key]);
   }
   globals.performance = { now: () => fakeNowMs };
@@ -152,6 +156,34 @@ function stubBrowser(): {
     },
   };
   const windowHandlers: Record<string, Array<(event: Record<string, unknown>) => void>> = {};
+  // 语音替身:分析器回测试设定的振幅,onended 由测试触发;页面读的是 window.AudioContext。
+  let voicePattern: Float32Array | null = null;
+  let voiceEnded: (() => void) | null = null;
+  class FakeAudioContext {
+    state = 'running';
+    destination = {};
+    resume = async () => {};
+    createAnalyser() {
+      return {
+        connect: () => {},
+        get fftSize() { return 2048; },
+        getFloatTimeDomainData: (out: Float32Array) => {
+          if (voicePattern) out.set(voicePattern.subarray(0, Math.min(out.length, voicePattern.length)));
+        },
+      };
+    }
+    decodeAudioData = async () => ({ duration: 1 });
+    createBufferSource() {
+      return {
+        buffer: null as unknown,
+        connect: () => {},
+        start: () => {},
+        stop: () => {},
+        disconnect: () => {},
+        set onended(fn: (() => void) | null) { voiceEnded = fn; },
+      };
+    }
+  }
   globals.window = {
     innerWidth: 1600,
     innerHeight: 900,
@@ -168,6 +200,9 @@ function stubBrowser(): {
     location: { protocol: 'http:', host: '127.0.0.1:18795', reload: () => { reloads.push(1); } },
     __DSH_MODEL_FILE__: 'miku.model3.json',
     __DSH_PAGE_VER__: 'aa11bb22',
+    // 缩短 boot 重试/自愈刷新的间隔(默认 5s):这里的断言等不了那么久。
+    __DSH_BOOT_RETRY_MS__: 20,
+    AudioContext: FakeAudioContext,
   };
   // 假 WebSocket:记下页面发出去的东西,并让测试能装作她回了话。
   globals.WebSocket = class {
@@ -208,16 +243,22 @@ function stubBrowser(): {
   };
   globals.fetch = async (url: string, opts?: { method?: string; body?: string }) => {
     const target = String(url);
+    if (target.startsWith('/voice/clip/')) {
+      return { ok: true, arrayBuffer: async () => new Uint8Array([82, 73, 70, 70]).buffer };
+    }
     if (opts && opts.method === 'POST') {
       posted.push({ url: target, body: String(opts.body) });
       return {
-        json: async () => (target.includes('/dialog/') ? { ok: true } : {}),
+        json: async () => {
+          if (target.includes('/voice/hear')) return { text: '你好呀' };
+          return target.includes('/dialog/') ? { ok: true } : {};
+        },
       };
     }
     return {
       json: async () => {
         if (target.includes('overrides')) return { Param137: 1 };
-        if (target.includes('chat.json')) return { enabled: true, agent: false, console: true };
+        if (target.includes('chat.json')) return { enabled: true, agent: false, console: true, voice: true, tts: true };
         if (target.includes('pat.json')) return { headMeshes: ['ArtMesh207'] };
         if (target.includes('/dialog/providers')) {
           return {
@@ -251,6 +292,35 @@ function stubBrowser(): {
     constructor() { instances.push(this as never); }
   }
   globals.EventSource = FakeEventSource;
+  // 按键发言替身:麦克风一开即得,MediaRecorder 停录时给一片数据再触发 onstop。
+  // navigator 这类全局在 Node 里是只读 getter,直接赋值会抛;defineProperty 换成可写的,
+  // afterEach 的还原赋值也因此走得通。
+  const stubGlobal = (key: string, value: unknown): void => {
+    const existing = Object.getOwnPropertyDescriptor(globalThis, key);
+    if (existing && existing.get && !existing.set) {
+      Object.defineProperty(globalThis, key, { value, writable: true, configurable: true });
+      return;
+    }
+    (globalThis as Record<string, unknown>)[key] = value;
+  };
+  stubGlobal('navigator', {
+    mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: () => {} }] }) },
+  });
+  class FakeMediaRecorder {
+    state = 'inactive';
+    mimeType = 'audio/webm';
+    ondataavailable: ((event: { data: Blob }) => void) | null = null;
+    onstop: (() => void) | null = null;
+    start(): void { this.state = 'recording'; }
+    stop(): void {
+      this.state = 'inactive';
+      setTimeout(() => {
+        this.ondataavailable?.({ data: new Blob(['fake-audio'], { type: 'audio/webm' }) });
+        this.onstop?.();
+      }, 0);
+    }
+  }
+  stubGlobal('MediaRecorder', FakeMediaRecorder);
 
   return {
     written, scales, positions, nodes, stored, instances, sockets, posted, reloads, headBounds,
@@ -270,6 +340,8 @@ function stubBrowser(): {
         beforeModelUpdate?.();
       }
     },
+    setVoicePattern: (level: number) => { voicePattern = new Float32Array(2048).fill(level); },
+    endVoice: () => { voiceEnded?.(); },
   };
 }
 
@@ -701,5 +773,112 @@ describe('播放器页面', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(node('tray').children.some((child) => child.className === 'note' && child.textContent.includes('最多'))).toBe(true);
     expect(node('tray').children.filter((child) => child.className === 'thumb').length).toBe(0);
+
+    // ── 语音:口型跟真实振幅;没语音时回退到振荡 ─────────────────────────────
+    stubs.written.length = 0;
+    stubs.setVoicePattern(0.2);   // RMS 0.2 × 增益 5 → 目标满开
+    send({ channels: {}, speaking: false, voice: { id: 7, url: '/voice/clip/7' } });
+    await new Promise((resolve) => setTimeout(resolve, 10));   // 取件 + 解码是异步的
+    expect(stubs.posted.some((p) => p.url === '/voice/heard' && p.body.includes('"id":7'))).toBe(true);
+    stubs.pump(6);   // ≈100ms:张嘴时间常数 30ms,该明显张开了
+    expect(last('ParamMouthOpenY')).toBeGreaterThan(0.5);
+    // 振幅落零:嘴按合嘴的时间常数收上。
+    stubs.setVoicePattern(0);
+    stubs.pump(20);  // ≈334ms:释放常数 90ms,该合上了
+    expect(last('ParamMouthOpenY')).toBeLessThan(0.1);
+    // 播完:口型不再跟音频,听 World 通道的。
+    send({ channels: { MouthOpen: 0.9 }, speaking: false });
+    stubs.endVoice();
+    stubs.pump(2);
+    expect(last('ParamMouthOpenY')).toBeCloseTo(0.9, 6);
+    // 同一段不重播:帧里再点名同一个 id,不再取件。
+    stubs.posted.length = 0;
+    send({ channels: {}, speaking: false, voice: { id: 7, url: '/voice/clip/7' } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(stubs.posted.filter((p) => p.url === '/voice/heard')).toHaveLength(0);
+    // 没语音在放而她在说话:回退到按时长的振荡(估算,不是同步)。
+    send({ channels: {}, speaking: true });
+    stubs.pump(3);
+    expect(last('ParamMouthOpenY')).toBeGreaterThan(0.3);
+
+    // ── 语音队列:按序播,清队代号变了就停 ────────────────────────────────────
+    stubs.written.length = 0;
+    stubs.setVoicePattern(0.2);
+    send({ channels: {}, speaking: false, voiceReset: 1, voice: { id: 8, url: '/voice/clip/8' } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    stubs.pump(6);
+    expect(last('ParamMouthOpenY')).toBeGreaterThan(0.5);   // 第一段在放
+    // 第二段到了:解码进待播队列。起声会先把开合清零,三帧里没有回落就是没打断第一段。
+    stubs.written.length = 0;
+    send({ channels: {}, speaking: false, voiceReset: 1, voice: { id: 9, url: '/voice/clip/9' } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    stubs.pump(3);
+    const duringQueue = stubs.written.filter((entry) => entry.param === 'ParamMouthOpenY').map((entry) => entry.value);
+    expect(duringQueue.length).toBeGreaterThan(0);
+    expect(Math.min(...duringQueue)).toBeGreaterThan(0.5);
+    // 第一段播完:队列往前走,第二段起声,口型跟新振幅(0.05 × 增益 5 = 0.25)。
+    stubs.setVoicePattern(0.05);
+    stubs.endVoice();
+    stubs.pump(15);
+    const secondClip = last('ParamMouthOpenY');
+    expect(secondClip).toBeGreaterThan(0.15);
+    expect(secondClip).toBeLessThan(0.35);
+    // 清队代号变了:停掉在放的、丢掉待播的,口型听 World 通道的。
+    send({ channels: { MouthOpen: 0.7 }, speaking: false, voiceReset: 2 });
+    stubs.pump(2);
+    expect(last('ParamMouthOpenY')).toBeCloseTo(0.7, 6);
+    stubs.endVoice();   // 已停:队列是空的,不会再起声
+    stubs.pump(2);
+    expect(last('ParamMouthOpenY')).toBeCloseTo(0.7, 6);
+    // 清队之后新来的语音照常取件播放。
+    stubs.setVoicePattern(0.2);
+    send({ channels: {}, speaking: false, voiceReset: 2, voice: { id: 10, url: '/voice/clip/10' } });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    stubs.pump(6);
+    expect(last('ParamMouthOpenY')).toBeGreaterThan(0.5);
+
+    // ── 按键发言:按住录音,松开转写,文本与打字输入同一条路 ──────────────────
+    node('btn-mic').fire('pointerdown', { pointerId: 9, preventDefault: () => {} });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(node('btn-mic').textContent).toBe('在录…');
+    node('btn-mic').fire('pointerup', {});
+    await new Promise((resolve) => setTimeout(resolve, 20));   // 收片、停录、送转写
+    expect(stubs.posted.some((p) => p.url === '/voice/hear')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    // 转写文本记进底部输入区,并从对话通道发了出去;牌子回到「按住说」。
+    expect(node('mine').children.map((child) => child.textContent)).toContain('你好呀');
+    expect(stubs.sockets[0]!.sent.some((s) => s.includes('你好呀'))).toBe(true);
+    expect(node('btn-mic').textContent).toBe('按住说');
+    expect(node('btn-mic').className).toBe('');
+
+    // ── 声音开关:真值随帧来,点一下写回 live2d 配置组 ────────────────────────
+    send({ channels: {}, speaking: false, voiceOn: true });
+    expect(node('btn-voice').textContent).toBe('声音·开');
+    expect(node('btn-voice').className).toBe('on');
+    send({ channels: {}, speaking: false, voiceOn: false });
+    expect(node('btn-voice').textContent).toBe('声音·关');
+    expect(node('btn-voice').className).toBe('off');
+    // 点一下:翻转后的值写回配置;写成了牌子跟着翻(下一帧的真值会再对一遍)。
+    node('btn-voice').fire('click');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const voiceWrite = stubs.posted.find((p) => p.url === '/dialog/config' && p.body.includes('voiceEnabled'));
+    expect(voiceWrite).toBeTruthy();
+    expect(voiceWrite!.body).toContain('"group":"live2d"');
+    expect(voiceWrite!.body).toContain(':true');
+    expect(node('btn-voice').textContent).toBe('声音·开');
+
+    // ── 上下文丢失:如实提示 + 排一次自愈刷新;自己恢复了就取消 ──────────────
+    const reloadsBefore = stubs.reloads.length;
+    node('stage').fire('webglcontextlost', { preventDefault: () => {} });
+    expect(node('why').textContent).toContain('显卡上下文丢了');
+    // 旧文案承诺"刷新这一页就回来"——内存还打着满时那是谎言,不许再出现。
+    expect(node('why').textContent).not.toContain('刷新这一页就回来');
+    node('stage').fire('webglcontextrestored', {});
+    await new Promise((resolve) => setTimeout(resolve, 120));   // 自愈刷新排在 3×20ms 之后
+    expect(stubs.reloads.length).toBe(reloadsBefore);           // 恢复了:刷新取消
+    // 一直没恢复:到点整页刷新一次,新页面是干净的恢复路。
+    node('stage').fire('webglcontextlost', { preventDefault: () => {} });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(stubs.reloads.length).toBe(reloadsBefore + 1);
   });
 });

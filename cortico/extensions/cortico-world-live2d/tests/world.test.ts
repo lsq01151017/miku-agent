@@ -916,3 +916,434 @@ describe('摸头', () => {
     expect(frame.clients).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('语音', () => {
+  /** 假 TTS:真的 HTTP 服务端,记下收到的请求体,回一段假 WAV;fail 回 api_v2 式的 JSON 错误。 */
+  async function fakeTts(fail: boolean, delayMs = 0): Promise<{
+    server: ReturnType<typeof createServer>;
+    port: number;
+    seen: string[];
+  }> {
+    const seen: string[] = [];
+    const wav = Buffer.from('RIFF,这是假 WAV 的字节', 'utf8');
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      req.on('end', () => {
+        seen.push(body);
+        setTimeout(() => {
+          if (fail) {
+            res.writeHead(400, { 'Content-Type': 'application/json' })
+              .end(JSON.stringify({ message: 'ref_audio_path is required' }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'audio/wav' }).end(wav);
+        }, delayMs);
+      });
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', () => done()));
+    return { server, port: (server.address() as AddressInfo).port, seen };
+  }
+
+  /** 假翻译:真的 HTTP 服务端,记下收到的请求体,回固定译文;fail 回 JSON 带 message。 */
+  async function fakeTranslate(fail: boolean): Promise<{
+    server: ReturnType<typeof createServer>;
+    port: number;
+    seen: string[];
+  }> {
+    const seen: string[] = [];
+    const server = createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      req.on('end', () => {
+        seen.push(body);
+        if (fail) {
+          res.writeHead(500, { 'Content-Type': 'application/json' })
+            .end(JSON.stringify({ message: '上游没回文本' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+          .end(JSON.stringify({ text: '今日はいい天気ですね。' }));
+      });
+    });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', () => done()));
+    return { server, port: (server.address() as AddressInfo).port, seen };
+  }
+
+  const close = (server: ReturnType<typeof createServer>): Promise<void> =>
+    new Promise<void>((done) => server.close(() => done()));
+
+  const say = (text: string, lang?: string): Promise<Response> =>
+    fetch(url('/voice/say'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(lang === undefined ? { text } : { text, lang }),
+    });
+
+  const heard = (id: number): Promise<Response> =>
+    fetch(url('/voice/heard'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    });
+
+  const ttsCfg = (port: number): Partial<Live2DConfigSection> => ({
+    ttsUrl: `http://127.0.0.1:${port}`,
+    ttsRefAudioFile: 'r.wav',
+    ttsPromptText: 'p',
+    ttsPromptLang: 'ja',
+    ttsTextLang: 'ja',
+  });
+
+  /** 常驻的页面连接:按需读下一帧(帧只在内容变化时推;等不到就超时)。 */
+  async function pageClient(): Promise<{
+    next: (timeoutMs?: number) => Promise<Record<string, unknown>>;
+    close: () => void;
+  }> {
+    const controller = new AbortController();
+    const response = await fetch(url('/state'), { signal: controller.signal });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    // 读的一创建就挂上兜底 catch:测试关掉连接时,留在途的读安静地结束,不报未处理拒绝。
+    const startRead = (): Promise<{ done: boolean; value?: Uint8Array }> => {
+      const read = reader.read() as Promise<{ done: boolean; value?: Uint8Array }>;
+      read.catch(() => { /* 连接已关 */ });
+      return read;
+    };
+    let pendingRead = startRead();
+    const next = async (timeoutMs = 4000): Promise<Record<string, unknown>> => {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const match = /(?:^|\n)data: (.*)/.exec(buffer);
+        if (match) {
+          buffer = buffer.slice(match.index + match[0].length);
+          return JSON.parse(match[1]!) as Record<string, unknown>;
+        }
+        if (Date.now() > deadline) throw new Error('等帧超时');
+        const chunk = await Promise.race([
+          pendingRead,
+          new Promise<'quiet'>((done) => setTimeout(() => done('quiet'), 100)),
+        ]);
+        if (chunk === 'quiet') continue;
+        pendingRead = startRead();
+        if (chunk.done) throw new Error('页面连接断了');
+        buffer += decoder.decode(chunk.value, { stream: true });
+      }
+    };
+    return { next, close: () => controller.abort() };
+  }
+
+  /** 一帧一帧读,直到某帧满足条件(帧里带语音/清掉语音这类"等它发生")。 */
+  const until = async (
+    page: { next: (timeoutMs?: number) => Promise<Record<string, unknown>> },
+    pred: (frame: Record<string, unknown>) => boolean,
+    timeoutMs = 4000,
+  ): Promise<Record<string, unknown>> => {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const frame = await page.next(Math.max(50, deadline - Date.now()));
+      if (pred(frame)) return frame;
+      if (Date.now() > deadline) throw new Error('等到超时');
+    }
+  };
+
+  it('没配 ttsUrl 时明确回绝', async () => {
+    await start();
+    expect((await say('你好')).status).toBe(409);
+  });
+
+  it('没有页面连着时明确回绝,也不去合成', async () => {
+    const fake = await fakeTts(false);
+    try {
+      await start(ttsCfg(fake.port));
+      expect((await say('你好')).status).toBe(409);
+      expect(fake.seen.length).toBe(0);
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('手动合成入队:帧里带队首取件地址,取到音频,回执后出队', async () => {
+    const fake = await fakeTts(false);
+    try {
+      await start({
+        ttsUrl: `http://127.0.0.1:${fake.port}`,
+        ttsRefAudioFile: 'refs/default.wav',
+        ttsPromptText: '参考的话',
+        ttsPromptLang: 'ja',
+        ttsTextLang: 'ja',
+      });
+      const page = await pageClient();
+      await page.next();   // 连上先给的那帧,还没有语音
+      const out = await (await say('こんにちは')).json() as { ok: boolean; id: number };
+      expect(out.ok).toBe(true);
+      // 发给 TTS 的请求体:文本、语言与参考四键,非流式要 WAV。
+      expect(JSON.parse(fake.seen[0]!)).toMatchObject({
+        text: 'こんにちは', text_lang: 'ja', ref_audio_path: 'refs/default.wav',
+        prompt_text: '参考的话', prompt_lang: 'ja', media_type: 'wav', streaming_mode: false,
+      });
+      const frame = await until(page, (f) => f.voice !== null) as { voice: { id: number; url: string } };
+      expect(frame.voice).toEqual({ id: out.id, url: `/voice/clip/${out.id}` });
+      const clip = await fetch(url(frame.voice.url));
+      expect(clip.status).toBe(200);
+      expect(clip.headers.get('content-type')).toContain('audio/wav');
+      expect((await clip.arrayBuffer()).byteLength).toBeGreaterThan(0);
+      // 回执后队首出队:帧里不再带语音,取件地址 404。
+      await heard(out.id);
+      const after = await until(page, (f) => f.voice === null);
+      expect(after.voice).toBeNull();
+      expect((await fetch(url(frame.voice.url))).status).toBe(404);
+      page.close();
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('配了翻译服务:原文进翻译,译文进 TTS,字幕不受影响', async () => {
+    const tr = await fakeTranslate(false);
+    const fake = await fakeTts(false);
+    try {
+      await start({ ...ttsCfg(fake.port), ttsTranslateUrl: `http://127.0.0.1:${tr.port}` });
+      const page = await pageClient();
+      await page.next();
+      const out = await (await say('今天天气真好。')).json() as { ok: boolean; id: number };
+      expect(out.ok).toBe(true);
+      expect(JSON.parse(tr.seen[0]!)).toEqual({ text: '今天天气真好。' });
+      // TTS 收到的是译文,不是原文。
+      expect((JSON.parse(fake.seen[0]!) as { text: string }).text).toBe('今日はいい天気ですね。');
+      await until(page, (f) => f.voice !== null);
+      page.close();
+    } finally {
+      await close(tr.server);
+      await close(fake.server);
+    }
+  });
+
+  it('翻译失败回退原文合成,这一段不静音', async () => {
+    const tr = await fakeTranslate(true);
+    const fake = await fakeTts(false);
+    try {
+      await start({ ...ttsCfg(fake.port), ttsTranslateUrl: `http://127.0.0.1:${tr.port}` });
+      const page = await pageClient();
+      await page.next();
+      const out = await (await say('你好呀')).json() as { ok: boolean; id: number };
+      expect(out.ok).toBe(true);
+      expect((JSON.parse(fake.seen[0]!) as { text: string }).text).toBe('你好呀');
+      await until(page, (f) => f.voice !== null);
+      page.close();
+    } finally {
+      await close(tr.server);
+      await close(fake.server);
+    }
+  });
+
+  it('她的回复按句界切段合成,页面按序取件,回执后队首前移', async () => {
+    const fake = await fakeTts(false);
+    try {
+      const live = await start(ttsCfg(fake.port));
+      const page = await pageClient();
+      await page.next();
+      const tap = live.outputTap();
+      tap.onEvent({ type: 'response.output_text.delta', delta: '今日はいい天気で' } as never);
+      tap.onEvent({ type: 'response.output_text.delta', delta: 'すね。外に' } as never);
+      tap.onEvent({ type: 'response.output_text.delta', delta: '出ましょう！' } as never);
+      const first = await until(page, (f) => f.voice !== null) as { voice: { id: number; url: string } };
+      expect((await fetch(url(first.voice.url))).status).toBe(200);
+      await heard(first.voice.id);
+      const second = await until(page, (f) =>
+        f.voice !== null && (f.voice as { id: number }).id !== first.voice.id) as { voice: { id: number } };
+      await heard(second.voice.id);
+      await until(page, (f) => f.voice === null);
+      // 两段按语序送进 TTS。
+      expect(fake.seen.map((body) => (JSON.parse(body) as { text: string }).text))
+        .toEqual(['今日はいい天気ですね。', '外に出ましょう！']);
+      page.close();
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('轮末把说剩的尾巴也送进合成', async () => {
+    const fake = await fakeTts(false);
+    try {
+      const live = await start(ttsCfg(fake.port));
+      const page = await pageClient();
+      await page.next();
+      const tap = live.outputTap();
+      tap.onEvent({ type: 'response.output_text.delta', delta: '这是没说完的半句' } as never);
+      await new Promise((resolve) => setTimeout(resolve, 150));   // 没有句界,不合成
+      expect(fake.seen.length).toBe(0);
+      tap.onRoundEnd?.();
+      await until(page, (f) => f.voice !== null);
+      expect((JSON.parse(fake.seen[0]!) as { text: string }).text).toBe('这是没说完的半句');
+      page.close();
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('打断清队:在途合成作废,清队代号递增,新回复照常合成', async () => {
+    const fake = await fakeTts(false, 300);   // 慢 TTS:打断发生在合成在途时
+    try {
+      const live = await start(ttsCfg(fake.port));
+      const page = await pageClient();
+      const opening = await page.next() as { voiceReset: number };
+      const tap = live.outputTap();
+      tap.onEvent({ type: 'response.output_text.delta', delta: '一句会被打断的话。' } as never);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      tap.onAbort?.('preempted');
+      await new Promise((resolve) => setTimeout(resolve, 400));   // 过了 TTS 的延迟,在途结果该作废
+      expect(fake.seen.length).toBe(1);   // 请求发出去了,结果没入队
+      const cleared = await until(page, (f) => f.voiceReset !== opening.voiceReset) as { voiceReset: number; voice: unknown };
+      expect(cleared.voice).toBeNull();
+      tap.onEvent({ type: 'response.output_text.delta', delta: '打断之后的新句子。' } as never);
+      await until(page, (f) => f.voice !== null);
+      expect((JSON.parse(fake.seen[1]!) as { text: string }).text).toBe('打断之后的新句子。');
+      page.close();
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('最后一页断连即清队:重连的页面不补旧话', async () => {
+    const fake = await fakeTts(false);
+    try {
+      const live = await start(ttsCfg(fake.port));
+      const page = await pageClient();
+      await page.next();
+      const tap = live.outputTap();
+      tap.onEvent({ type: 'response.output_text.delta', delta: '说给没人听的话。' } as never);
+      await until(page, (f) => f.voice !== null);
+      page.close();
+      await new Promise((resolve) => setTimeout(resolve, 150));   // 断连处理完
+      const back = await pageClient();
+      const frame = await back.next() as { voice: unknown; voiceReset: number };
+      expect(frame.voice).toBeNull();
+      expect(frame.voiceReset).toBe(1);
+      back.close();
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('没有页面在看,她的回复不合成语音', async () => {
+    const fake = await fakeTts(false);
+    try {
+      const live = await start(ttsCfg(fake.port));
+      const tap = live.outputTap();
+      tap.onEvent({ type: 'response.output_text.delta', delta: '没人看的时候说的话。' } as never);
+      tap.onRoundEnd?.();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(fake.seen.length).toBe(0);
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('请求里带 lang 覆盖默认语言;不是队首的回执不动队列', async () => {
+    const fake = await fakeTts(false);
+    try {
+      await start(ttsCfg(fake.port));
+      const page = await pageClient();
+      await page.next();
+      await say('你好', 'zh');
+      const frame = await until(page, (f) => f.voice !== null) as { voice: { id: number } };
+      expect((JSON.parse(fake.seen[0]!) as { text_lang: string }).text_lang).toBe('zh');
+      expect((await fetch(url('/voice/clip/999'))).status).toBe(404);
+      await heard(999);
+      const still = await page.next() as { voice: { id: number } | null };
+      expect(still.voice!.id).toBe(frame.voice.id);
+      page.close();
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('TTS 回错误时把话带回来,不装作合成成功', async () => {
+    const fake = await fakeTts(true);
+    try {
+      await start(ttsCfg(fake.port));
+      const page = await pageClient();
+      await page.next();
+      const out = await (await say('你好')).json() as { error?: string };
+      expect(String(out.error)).toContain('ref_audio_path is required');
+      const frame = await page.next() as { voice: unknown };
+      expect(frame.voice).toBeNull();
+      page.close();
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('声音开关关着时明确回绝,也不去合成', async () => {
+    const fake = await fakeTts(false);
+    try {
+      await start({ ...ttsCfg(fake.port), voiceEnabled: false });
+      // 配了 TTS,页面的「声音」按钮就该出现——开关值是另一回事。
+      expect(await (await fetch(url('/pack/chat.json'))).json()).toMatchObject({ tts: true });
+      const page = await pageClient();
+      await page.next();
+      const out = await (await say('你好')).json() as { error?: string };
+      expect(String(out.error)).toContain('声音开关关着');
+      expect(fake.seen.length).toBe(0);
+      page.close();
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('帧里带声音开关真值;关上时排着的段被收掉', async () => {
+    const fake = await fakeTts(false);
+    try {
+      const live = await start(ttsCfg(fake.port));
+      const page = await pageClient();
+      const opening = await page.next() as { voiceOn: boolean };
+      expect(opening.voiceOn).toBe(true);
+      await say('こんにちは');
+      const queued = await until(page, (f) => f.voice !== null) as { voice: { id: number }; voiceReset: number };
+      expect(queued.voiceReset).toBe(0);
+      // 控制台写配置是原地改活 cfg:关上开关,下一帧把排着的段收掉,清队代号递增。
+      (live as unknown as { cfg: Live2DConfigSection }).cfg.voiceEnabled = false;
+      const off = await until(page, (f) => f.voiceOn === false) as { voice: unknown; voiceReset: number };
+      expect(off.voice).toBeNull();
+      expect(off.voiceReset).toBe(1);
+      page.close();
+    } finally {
+      await close(fake.server);
+    }
+  });
+
+  it('没配 asrUrl 时按键发言明确回绝', async () => {
+    await start();
+    const res = await fetch(url('/voice/hear'), { method: 'POST', body: 'audio' });
+    expect(res.status).toBe(409);
+  });
+
+  it('按键发言:音频原样转给转写服务,文本回到页面', async () => {
+    const seen: Array<{ type: string; bytes: Buffer }> = [];
+    const asr = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => { chunks.push(chunk); });
+      req.on('end', () => {
+        seen.push({ type: String(req.headers['content-type'] ?? ''), bytes: Buffer.concat(chunks) });
+        res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ text: '你好呀' }));
+      });
+    });
+    await new Promise<void>((done) => asr.listen(0, '127.0.0.1', () => done()));
+    try {
+      await start({ asrUrl: `http://127.0.0.1:${(asr.address() as AddressInfo).port}` });
+      expect(await (await fetch(url('/pack/chat.json'))).json()).toMatchObject({ voice: true });
+      const audio = Buffer.from('fake-webm-bytes');
+      const out = await (await fetch(url('/voice/hear'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'audio/webm; codecs=opus' },
+        body: audio,
+      })).json() as { text: string };
+      expect(out.text).toBe('你好呀');
+      expect(seen).toEqual([{ type: 'audio/webm; codecs=opus', bytes: audio }]);
+    } finally {
+      await close(asr);
+    }
+  });
+});
