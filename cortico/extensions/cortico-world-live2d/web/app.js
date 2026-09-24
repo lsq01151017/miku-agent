@@ -51,11 +51,12 @@
   var VOICE_ATTACK_TAU_SEC = 0.03;
   var VOICE_RELEASE_TAU_SEC = 0.09;
 
-  /** 底部输入区留多少条历史(收起时只看得到最近一句);字幕在她说完之后留一会儿再淡掉。 */
+  /** 底部输入区留多少条历史(收起时只看得到最近一句);字幕堆完一轮的话,等她说完全部
+   *  再淡掉:淡掉计时从她收声那一刻重新起算,这段时间是留给读的。 */
   var MINE_LINES = 50;
   /** 拖到多远也要留这么多像素的她可见。 */
   var KEEP_VISIBLE_PX = 80;
-  var SUBTITLE_MS = 9000;
+  var SUBTITLE_MS = 15000;
   var SYSTEM_SUBTITLE_MS = 6000;
   /**
    * 启动失败与上下文丢失后的重试间隔(毫秒)。bot 没起来、系统虚拟内存不足,都是等一等
@@ -196,6 +197,7 @@
   var useAgent = false;
   var subtitleText = '';
   var subtitleTimer = null;
+  var subtitleHoldMs = SUBTITLE_MS;
   // 附图:进托盘时归一化成 base64,发话时随文本走终端通道的 images 字段。
   var attached = [];
   var attachPending = 0;
@@ -389,7 +391,7 @@
       : (el.mine && el.mine.children.length > 0 ? '历史 ' + el.mine.children.length : '历史');
   }
 
-  /** 字幕换一整段(终端通道给的是整句)。 */
+  /** 字幕换一整段(系统提示走这条;她的话走堆句那条)。 */
   function showSubtitle(text, system) {
     subtitleText = typeof text === 'string' ? text : '';
     renderSubtitle(system ? SYSTEM_SUBTITLE_MS : SUBTITLE_MS);
@@ -401,22 +403,33 @@
     renderSubtitle(SUBTITLE_MS);
   }
 
+  /** 字幕堆一句(控制台通道一句一条):同一轮的话全堆着,说完全部才一起淡掉。 */
+  function appendSubtitleLine(text) {
+    if (typeof text !== 'string' || text === '') return;
+    subtitleText = subtitleText === '' ? text : subtitleText + '\n' + text;
+    renderSubtitle(SUBTITLE_MS);
+  }
+
   function renderSubtitle(holdMs) {
     if (!el.subtitle) return;
     // 换行照显,但行尾空白与空行去掉:流式吐字时它们会多顶出一行,看着就是凭空多出来的行距。
     var shown = subtitleText.replace(/[ \t]+$/gm, '').replace(/\n{2,}/g, '\n').replace(/\n+$/, '');
     el.subtitle.textContent = shown;
     el.subtitle.className = shown === '' ? 'glass' : 'glass on';
+    subtitleHoldMs = holdMs;
+    armSubtitleFade();
+  }
+
+  /** 到点淡掉;她还在说就再等一轮——字幕要说完全部的话才消失。 */
+  function armSubtitleFade() {
+    if (!el.subtitle) return;
     if (subtitleTimer !== null) clearTimeout(subtitleTimer);
     subtitleTimer = setTimeout(function () {
       subtitleTimer = null;
-      // 她还在说就先留着;说完了这一条自己淡掉。
-      if (!speaking) el.subtitle.className = 'glass';
-    }, holdMs);
+      if (speaking) { armSubtitleFade(); return; }
+      el.subtitle.className = 'glass';
+    }, subtitleHoldMs);
   }
-
-  /** 新的一段开始时把上一条字幕清掉:她的下一句不是接在上一句后面。 */
-  function beginSubtitle() { subtitleText = ''; }
 
   function openChat() {
     var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -436,10 +449,9 @@
       if (payload.type === 'sys' && typeof payload.text === 'string') { showSubtitle(payload.text, true); return; }
       if (typeof payload.text !== 'string' || payload.text === '') return;
       var from = typeof payload.from === 'string' ? payload.from : '';
-      if (from === '制作人' || from === '控制台') return;   // 我自己的话已经记在输入区了
+      if (from === '制作人' || from === '控制台') { showSubtitle(''); return; }   // 我自己的话记在输入区了;它同时开新一轮,旧字幕收掉
       if (from === '') { showSubtitle(payload.text, true); return; }
-      if (!speaking) beginSubtitle();
-      showSubtitle(payload.text);
+      appendSubtitleLine(payload.text);
     };
   }
 
@@ -461,7 +473,7 @@
 
   /** 外部 Agent:一句话 POST 到本 World,它转给 Agent 并把返回的增量流回来。 */
   function sendToAgent(text) {
-    beginSubtitle();
+    showSubtitle('');   // 我的话开新一轮:旧字幕收掉,她接下来的话从头堆
     fetch(AGENT_CHAT_PATH, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1847,8 +1859,10 @@
       var nowSpeaking = Boolean(payload.speaking);
       if (nowSpeaking && !speaking) {
         speakStart = performance.now();
-        // 新的一段:上一句字幕清掉,等这一句。
-        if (!useAgent) beginSubtitle();
+      }
+      if (!nowSpeaking && speaking) {
+        // 她收声了:淡掉计时从这一刻重新起算,留足读完一轮话的时间。
+        armSubtitleFade();
       }
       speaking = nowSpeaking;
       // 语音:清队代号变了先停播清队(她的话被打断),再取新点名的队首。

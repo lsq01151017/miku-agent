@@ -91,13 +91,14 @@
   }
   #subtitle {
     position: relative;
-    width: min(1140px, calc(100vw - 28px)); padding: 8px 16px; border-radius: 10px;
+    width: min(1600px, calc(100vw - 28px)); padding: 8px 16px; border-radius: 10px;
     /* 半透明磨砂,不描墨线:她从字幕后面透出来,模糊把透上来的她揉虚;框会把她隔在外面。 */
     background: rgba(253, 254, 255, 0.72);
     -webkit-backdrop-filter: blur(10px) saturate(120%);
     backdrop-filter: blur(10px) saturate(120%);
     box-shadow: 3px 3px 0 rgba(10, 14, 26, 0.85);
-    color: var(--pop-ink); font: 500 15px/1.5 system-ui, "Microsoft YaHei", sans-serif;
+    /* 一轮的话全堆在这里:框放宽,行距收紧,堆起来是密密一片而不是松散几行。 */
+    color: var(--pop-ink); font: 500 15px/1.35 system-ui, "Microsoft YaHei", sans-serif;
     text-align: center; white-space: pre-wrap; word-break: break-word;
     opacity: 0; transition: opacity .18s ease;
     pointer-events: none;
